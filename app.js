@@ -9,7 +9,10 @@ const TPL_KEY = 'learnlog_templates_v1';
 const BADGE_KEY = 'learnlog_badges_v1';
 const HABIT_KEY = 'learnlog_habits_v1';
 const GOAL_KEY = 'learnlog_goals_v1';
+const BACKUP_KEY = 'learnlog_autobackup_v1';
+const MAX_BACKUPS = 7;
 const CAT_PALETTE = ['#3b6cf6', '#2ea121', '#ff8800', '#a855f7', '#ec4899', '#14b8a6', '#f53f3f', '#64748b'];
+const ACCENT_PRESETS = ['#3b6cf6', '#7c4dff', '#e0408a', '#1aa179', '#f5871f', '#0ea5b7', '#e5484d', '#475569'];
 
 /* ---------- 工具函数 ---------- */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -36,9 +39,9 @@ function loadData() {
   try { return JSON.parse(localStorage.getItem(DATA_KEY)) || {}; }
   catch { return {}; }
 }
-function saveData(data) { localStorage.setItem(DATA_KEY, JSON.stringify(data)); }
+function saveData(data) { localStorage.setItem(DATA_KEY, JSON.stringify(data)); scheduleAutoSnapshot(); }
 function loadSettings() {
-  const def = { theme: 'light', categories: ['学习', '工作', '生活', '健身'], catColors: {}, focusMin: 25, breakMin: 5, dailyGoal: 0, soundOn: true };
+  const def = { theme: 'light', accent: '#3b6cf6', categories: ['学习', '工作', '生活', '健身'], catColors: {}, focusMin: 25, breakMin: 5, dailyGoal: 0, weeklyGoal: 0, soundOn: true };
   try { return { ...def, ...(JSON.parse(localStorage.getItem(SET_KEY)) || {}) }; }
   catch { return def; }
 }
@@ -49,22 +52,22 @@ function ensureCatColors() {
   });
   saveSettings(state.settings);
 }
-function saveSettings(s) { localStorage.setItem(SET_KEY, JSON.stringify(s)); }
+function saveSettings(s) { localStorage.setItem(SET_KEY, JSON.stringify(s)); scheduleAutoSnapshot(); }
 function loadTemplates() {
   try { return JSON.parse(localStorage.getItem(TPL_KEY)) || []; }
   catch { return []; }
 }
-function saveTemplates(arr) { localStorage.setItem(TPL_KEY, JSON.stringify(arr)); }
+function saveTemplates(arr) { localStorage.setItem(TPL_KEY, JSON.stringify(arr)); scheduleAutoSnapshot(); }
 function loadBadges() {
   try { return JSON.parse(localStorage.getItem(BADGE_KEY)) || { earned: [] }; }
   catch { return { earned: [] }; }
 }
-function saveBadges(b) { localStorage.setItem(BADGE_KEY, JSON.stringify(b)); }
+function saveBadges(b) { localStorage.setItem(BADGE_KEY, JSON.stringify(b)); scheduleAutoSnapshot(); }
 function loadHabits() {
   try { return JSON.parse(localStorage.getItem(HABIT_KEY)) || defaultHabits(); }
   catch { return defaultHabits(); }
 }
-function saveHabits(arr) { localStorage.setItem(HABIT_KEY, JSON.stringify(arr)); }
+function saveHabits(arr) { localStorage.setItem(HABIT_KEY, JSON.stringify(arr)); scheduleAutoSnapshot(); }
 function defaultHabits() {
   return [
     { id: uid(), name: '背单词', created: fmtDate(new Date()) },
@@ -81,7 +84,96 @@ function loadGoals() {
   try { return JSON.parse(localStorage.getItem(GOAL_KEY)) || []; }
   catch { return []; }
 }
-function saveGoals(arr) { localStorage.setItem(GOAL_KEY, JSON.stringify(arr)); }
+function saveGoals(arr) { localStorage.setItem(GOAL_KEY, JSON.stringify(arr)); scheduleAutoSnapshot(); }
+
+/* ============================================================
+   数据保险箱（浏览器内自动滚动备份，防 localStorage 误清）
+   ============================================================ */
+function loadBackups() {
+  try { return JSON.parse(localStorage.getItem(BACKUP_KEY)) || []; }
+  catch { return []; }
+}
+function saveBackups(arr) { localStorage.setItem(BACKUP_KEY, JSON.stringify(arr)); }
+function snapshotAll() {
+  return {
+    [DATA_KEY]: localStorage.getItem(DATA_KEY),
+    [SET_KEY]: localStorage.getItem(SET_KEY),
+    [TPL_KEY]: localStorage.getItem(TPL_KEY),
+    [BADGE_KEY]: localStorage.getItem(BADGE_KEY),
+    [HABIT_KEY]: localStorage.getItem(HABIT_KEY),
+    [GOAL_KEY]: localStorage.getItem(GOAL_KEY),
+  };
+}
+function saveSnapshot(label) {
+  const snap = { ts: Date.now(), date: fmtDate(new Date()), label: label || 'manual', data: snapshotAll() };
+  const arr = loadBackups();
+  arr.unshift(snap);
+  while (arr.length > MAX_BACKUPS) arr.pop();
+  saveBackups(arr);
+  return snap;
+}
+let _snapTimer = null;
+function scheduleAutoSnapshot() {
+  if (_snapTimer) return;
+  _snapTimer = setTimeout(() => {
+    _snapTimer = null;
+    const arr = loadBackups();
+    const today = fmtDate(new Date());
+    if (!arr.some(s => s.date === today && s.label === 'auto')) saveSnapshot('auto');
+  }, 4000);
+}
+function restoreSnapshot(ts) {
+  const snap = loadBackups().find(s => s.ts === ts);
+  if (!snap) return;
+  if (!confirm('恢复到 ' + new Date(snap.ts).toLocaleString('zh-CN') + ' 的备份？当前未备份的数据会被覆盖。')) return;
+  Object.entries(snap.data).forEach(([k, v]) => {
+    if (v === null || v === undefined) localStorage.removeItem(k); else localStorage.setItem(k, v);
+  });
+  reloadState();
+  toast('已恢复到 ' + snap.date + ' 的备份');
+  renderBackupList();
+}
+function deleteSnapshot(ts) {
+  saveBackups(loadBackups().filter(s => s.ts !== ts));
+  renderBackupList();
+}
+function reloadState() {
+  state.settings = loadSettings();
+  ensureCatColors();
+  refreshCategorySelect();
+  renderAll();
+  renderHabits();
+  renderGoals();
+  renderStats();
+  renderBackupList();
+  if (typeof bindTimer === 'function') bindTimer();
+}
+function openBackupModal() {
+  $('#backupModal').hidden = false;
+  renderBackupList();
+}
+function renderBackupList() {
+  const box = $('#backupList');
+  if (!box) return;
+  const arr = loadBackups();
+  if (!arr.length) { box.innerHTML = '<li class="tpl-empty">还没有备份。修改数据后约 4 秒会自动生成每日备份，也可点「立即备份」。</li>'; return; }
+  box.innerHTML = arr.map(s => `
+    <li data-ts="${s.ts}">
+      <div class="bk-info">
+        <span class="bk-time">${new Date(s.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+        <span class="bk-label ${s.label === 'auto' ? 'auto' : 'manual'}">${s.label === 'auto' ? '自动' : '手动'}</span>
+      </div>
+      <div class="bk-actions">
+        <button class="text-btn sm" data-act="restore">恢复</button>
+        <button class="text-btn sm danger" data-act="del">删除</button>
+      </div>
+    </li>`).join('');
+  $$('#backupList li[data-ts]').forEach(li => {
+    const ts = +li.dataset.ts;
+    li.querySelector('[data-act="restore"]').onclick = () => restoreSnapshot(ts);
+    li.querySelector('[data-act="del"]').onclick = () => deleteSnapshot(ts);
+  });
+}
 
 function getDay(dateStr) {
   const data = loadData();
@@ -105,6 +197,7 @@ const state = {
   taskFilter: 'all',
   editingId: null,
   searchTag: '',
+  currentView: 'plan',
 };
 let draggedId = null;
 
@@ -114,6 +207,28 @@ function catColor(name) {
   const cats = state.settings.categories;
   const idx = cats.indexOf(name);
   return CAT_PALETTE[(idx >= 0 ? idx : cats.length) % CAT_PALETTE.length];
+}
+// 两个十六进制颜色按比例混合，t=0 取 c1，t=1 取 c2
+function mixHex(c1, c2, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const a = p(c1), b = p(c2);
+  const m = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  return '#' + m.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+// 应用主题色：写入 --primary / --primary-soft，深色模式自动提亮主色、压暗底色
+function applyAccent() {
+  const a = state.settings.accent || '#3b6cf6';
+  const dark = state.settings.theme === 'dark';
+  const primary = dark ? mixHex(a, '#ffffff', 0.18) : a;
+  const soft = dark ? mixHex(a, '#161a22', 0.80) : mixHex(a, '#ffffff', 0.86);
+  const r = document.documentElement;
+  r.style.setProperty('--primary', primary);
+  r.style.setProperty('--primary-soft', soft);
+}
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', state.settings.theme);
+  $('#themeBtn').textContent = state.settings.theme === 'dark' ? '☀' : '🌙';
+  applyAccent();
 }
 function refreshCategorySelect() {
   const sel = $('#taskCategory');
@@ -126,8 +241,7 @@ function refreshCategorySelect() {
    初始化
    ============================================================ */
 function init() {
-  document.documentElement.setAttribute('data-theme', state.settings.theme);
-  $('#themeBtn').textContent = state.settings.theme === 'dark' ? '☀' : '🌙';
+  applyTheme();
 
   ensureCatColors();
   refreshCategorySelect();
@@ -142,6 +256,7 @@ function init() {
   renderGoals();
   registerSW();
   startReminderChecker();
+  scheduleAutoSnapshot();
 }
 
 function bindEvents() {
@@ -215,6 +330,8 @@ function bindEvents() {
     else if (act === 'habits') openHabitModal();
     else if (act === 'goals') openGoalModal();
     else if (act === 'tpl') openTplModal();
+    else if (act === 'backup') openBackupModal();
+    else if (act === 'appearance') openAppearanceModal();
     else if (act === 'exportAll') exportAll();
     else if (act === 'import') $('#importFile').click();
     else if (act === 'sample') loadSample();
@@ -269,6 +386,31 @@ function bindEvents() {
   $('#reviewInsertBtn').onclick = reviewInsertNote;
   $('#reviewExportBtn').onclick = reviewExport;
 
+  // 数据保险箱弹窗
+  $('#backupClose').onclick = () => $('#backupModal').hidden = true;
+  $('#backupModal').onclick = (e) => { if (e.target.id === 'backupModal') $('#backupModal').hidden = true; };
+  $('#backupNowBtn').onclick = () => { saveSnapshot('manual'); renderBackupList(); toast('已立即备份'); };
+
+  // 外观设置弹窗
+  $('#appearanceClose').onclick = () => $('#appearanceModal').hidden = true;
+  $('#appearanceModal').onclick = (e) => { if (e.target.id === 'appearanceModal') $('#appearanceModal').hidden = true; };
+  $('#accentCustom').oninput = (e) => { if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) setAccent(e.target.value); };
+
+  // 今日复盘弹窗
+  $('#reviewDayBtn').onclick = openDayReview;
+  $('#drClose').onclick = () => $('#dayReviewModal').hidden = true;
+  $('#dayReviewModal').onclick = (e) => { if (e.target.id === 'dayReviewModal') $('#dayReviewModal').hidden = true; };
+  $('#drSave').onclick = saveDayReview;
+  $('#drClose2').onclick = () => $('#dayReviewModal').hidden = true;
+  $('#drStars').querySelectorAll('.star').forEach(s => s.onclick = () => drSetRating(+s.dataset.star));
+
+  // 周目标
+  $('#weeklyGoalInput').onchange = (e) => {
+    state.settings.weeklyGoal = Math.max(0, Math.min(200, +e.target.value || 0));
+    saveSettings(state.settings);
+    renderMiniStats(); renderStats();
+  };
+
   // 帮助弹窗
   $('#helpClose').onclick = closeHelp;
   $('#helpModal').onclick = (e) => { if (e.target.id === 'helpModal') closeHelp(); };
@@ -296,6 +438,10 @@ function bindHotkeys() {
       if (!$('#habitModal').hidden) { $('#habitModal').hidden = true; return; }
       if (!$('#goalModal').hidden) { $('#goalModal').hidden = true; return; }
       if (!$('#reviewModal').hidden) { $('#reviewModal').hidden = true; return; }
+      if (!$('#dayReviewModal').hidden) { $('#dayReviewModal').hidden = true; return; }
+      if (!$('#backupModal').hidden) { $('#backupModal').hidden = true; return; }
+      if (!$('#appearanceModal').hidden) { $('#appearanceModal').hidden = true; return; }
+      if (document.body.classList.contains('immersive')) { toggleImmersive(); return; }
       if (!$('#helpModal').hidden) { closeHelp(); return; }
       if (!$('#exportMenu').hidden) { $('#exportMenu').hidden = true; return; }
       if (!$('#settingsMenu').hidden) { $('#settingsMenu').hidden = true; return; }
@@ -313,6 +459,7 @@ function bindHotkeys() {
     else if (k === 'w') { switchView('week'); e.preventDefault(); }
     else if (k === 'm') { switchView('month'); e.preventDefault(); }
     else if (k === '/') { switchView('search'); $('#searchInput').focus(); e.preventDefault(); }
+    else if (k === 'f' && state.currentView === 'focus') { toggleImmersive(); e.preventDefault(); }
     else if (e.key === '?') { openHelp(); e.preventDefault(); }
   });
 }
@@ -401,6 +548,24 @@ function parseQuickInput(raw) {
   res.title = text.replace(/\s+/g, ' ').trim();
   return res;
 }
+/* 标签：从文本里提取 #标签（分类标记已在 parseQuickInput 中消费，这里补充剩余标签）
+   标签为 2-20 位中英文/数字/下划线，返回去重后的数组。 */
+function extractTags(text) {
+  const set = new Set();
+  String(text).replace(/#([\u4e00-\u9fa5\w]{2,20})/g, (m, tag) => { set.add(tag); return m; });
+  return [...set];
+}
+function renderTagChips(tags) {
+  if (!tags || !tags.length) return '';
+  return `<span class="task-tags">${tags.map(t => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join('')}</span>`;
+}
+/* 本周已完成任务数（用于周目标进度） */
+function weeklyDoneCount() {
+  const data = loadData();
+  let n = 0;
+  weekRange().forEach(ds => { const e = data[ds]; if (e) n += e.tasks.filter(t => t.done).length; });
+  return n;
+}
 function addTask() {
   const raw = $('#taskTitle').value.trim();
   if (!raw) return;
@@ -414,6 +579,7 @@ function addTask() {
     category: p.category || $('#taskCategory').value,
     priority: p.priority || $('#taskPriority').value,
     done: false,
+    tags: extractTags(p.title),
     order: getDay(state.currentDate).tasks.length,
   };
   updateDay(state.currentDate, d => d.tasks.push(task));
@@ -487,6 +653,8 @@ function renderPlan() {
       <span class="task-title">${escapeHtml(t.title)}</span>
       <span class="task-cat" style="background:${catColor(t.category)}">${escapeHtml(t.category)}</span>
       <span class="task-pri pri-${t.priority}">${t.priority}</span>
+      ${t.focusMin ? `<span class="task-focus" title="累计专注">⏱${t.focusMin}分</span>` : ''}
+      ${renderTagChips(t.tags)}
       <button class="task-edit" data-act="edit" title="编辑">✎</button>
       <button class="task-del" data-act="del" title="删除">×</button>
     </li>`;
@@ -522,6 +690,7 @@ function renderPlan() {
     }
   });
   renderRating();
+  renderFocusTaskSelect();
 }
 function saveTaskEdit(id, li) {
   const title = li.querySelector('.edit-title').value.trim();
@@ -533,6 +702,7 @@ function saveTaskEdit(id, li) {
       t.time = li.querySelector('.edit-time').value || '';
       t.category = li.querySelector('.edit-cat').value;
       t.priority = li.querySelector('.edit-pri').value;
+      t.tags = extractTags(title);
     }
   });
   state.editingId = null;
@@ -631,6 +801,19 @@ function computeStats() {
   }
   return { totalTasks, totalDone, daysWithData, daysWithDone, catCount, streak, bestStreak, focusTotal };
 }
+function weekFocusByCat(offsetWeeks) {
+  const out = {};
+  const today = new Date();
+  const dow = (today.getDay() + 6) % 7; // 周一为一周起点
+  const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - dow - offsetWeeks * 7);
+  const data = loadData();
+  for (let i = 0; i < 7; i++) {
+    const ds = fmtDate(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i));
+    const e = data[ds];
+    if (e && e.focusByCat) Object.entries(e.focusByCat).forEach(([k, v]) => { out[k] = (out[k] || 0) + v; });
+  }
+  return out;
+}
 function renderStats() {
   const s = computeStats();
   const rate = s.totalTasks ? Math.round(s.totalDone / s.totalTasks * 100) : 0;
@@ -642,12 +825,17 @@ function renderStats() {
   let rs = 0, rc = 0;
   Object.values(data).forEach(d => { if (d.rating > 0) { rs += d.rating; rc++; } });
   const avgRating = rc ? (rs / rc).toFixed(1) : '—';
+  const wGoal = state.settings.weeklyGoal || 0;
+  const wDone = weeklyDoneCount();
+  const wRate = wGoal ? Math.round(wDone / wGoal * 100) : 0;
+  const wgi = $('#weeklyGoalInput'); if (wgi) wgi.value = state.settings.weeklyGoal || '';
   $('#statCards').innerHTML = `
     <div class="stat-card"><div class="sc-val">${rate}%</div><div class="sc-label">总任务完成率</div></div>
     <div class="stat-card"><div class="sc-val">${s.totalDone}/${s.totalTasks}</div><div class="sc-label">完成任务 / 总任务</div></div>
     <div class="stat-card"><div class="sc-val">🔥 ${s.streak}</div><div class="sc-label">连续打卡（最佳 ${s.bestStreak}）</div></div>
     <div class="stat-card"><div class="sc-val">⏱ ${todayFocus}</div><div class="sc-label">今日专注（分钟）</div></div>
-    <div class="stat-card"><div class="sc-val">${avgRating}</div><div class="sc-label">平均每日评分</div></div>`;
+    <div class="stat-card"><div class="sc-val">${avgRating}</div><div class="sc-label">平均每日评分</div></div>
+    <div class="stat-card"><div class="sc-val">${wGoal ? wDone + '/' + wGoal : '—'}</div><div class="sc-label">本周目标完成${wGoal ? '（' + wRate + '%）' : '（未设置）'}</div></div>`;
 
   // 近 7 天
   const today = new Date();
@@ -679,6 +867,46 @@ function renderStats() {
       <div class="bar-label">${w.label}</div>
       <div class="bar-label">${w.val}分</div>
     </div>`).join('');
+
+  // 专注主题分布（时间都花在哪）
+  const themeMap = {};
+  Object.values(data).forEach(d => {
+    if (d.focusByCat) Object.entries(d.focusByCat).forEach(([k, v]) => { themeMap[k] = (themeMap[k] || 0) + v; });
+  });
+  const themes = Object.entries(themeMap).sort((a, b) => b[1] - a[1]);
+  const tmax = themes.length ? themes[0][1] : 1;
+  const tsum = themes.reduce((a, [, v]) => a + v, 0);
+  const ftc = $('#focusThemeChart');
+  if (ftc) ftc.innerHTML = themes.length ? themes.map(([name, min]) => `
+    <div class="cat-row">
+      <span class="cat-dot" style="background:${name === '未分类' ? 'var(--text-soft)' : catColor(name)}"></span>
+      <span style="min-width:54px">${escapeHtml(name)}</span>
+      <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${min / tmax * 100}%;background:${name === '未分类' ? 'var(--text-soft)' : catColor(name)}"></div></div>
+      <span class="cat-count">${min}分 · ${tsum ? Math.round(min / tsum * 100) : 0}%</span>
+    </div>`).join('') : '<p class="empty-hint">还没有专注记录，去番茄钟专注一轮吧</p>';
+
+  // 近两周专注主题对比（本周 vs 上周）
+  const tw = weekFocusByCat(0), lw = weekFocusByCat(1);
+  const trendCats = [...new Set([...Object.keys(tw), ...Object.keys(lw)])]
+    .sort((a, b) => ((tw[b] || 0) + (lw[b] || 0)) - ((tw[a] || 0) + (lw[a] || 0)));
+  const wMax = Math.max(1, ...trendCats.map(c => tw[c] || 0));
+  const lMax = Math.max(1, ...trendCats.map(c => lw[c] || 0));
+  const ftc2 = $('#focusTrendChart');
+  if (ftc2) ftc2.innerHTML = trendCats.length ? trendCats.map(cat => {
+    const w = tw[cat] || 0, p = lw[cat] || 0;
+    const delta = w - p;
+    const dCls = delta > 0 ? ' up' : delta < 0 ? ' down' : '';
+    const dTxt = delta > 0 ? '▲ +' + delta : delta < 0 ? '▼ ' + delta : '±0';
+    return `
+    <div class="trend-row">
+      <span class="trend-cat">${escapeHtml(cat)}</span>
+      <div class="trend-bars">
+        <div class="trend-bar-line"><div class="trend-bar this" style="width:${Math.round(w / wMax * 100)}%"></div><span class="trend-val">${w}</span></div>
+        <div class="trend-bar-line"><div class="trend-bar last" style="width:${Math.round(p / lMax * 100)}%"></div><span class="trend-val">${p}</span></div>
+      </div>
+      <span class="trend-delta${dCls}">${dTxt}</span>
+    </div>`;
+  }).join('') : '<p class="empty-hint">近两周还没有专注记录</p>';
 
   // 分类分布
   const cats = Object.entries(s.catCount).sort((a, b) => b[1] - a[1]);
@@ -887,19 +1115,44 @@ function renderMiniStats() {
     const diff = goal - done;
     goalRow = `<div class="ms-row"><span>每日目标</span><b>${diff > 0 ? '还差 ' + diff + ' 项' : '已达成 🎉'}</b></div>`;
   }
+  let weekRow = '';
+  const wGoal = state.settings.weeklyGoal || 0;
+  if (wGoal > 0) {
+    const wDone = weeklyDoneCount();
+    const wPct = Math.min(100, Math.round(wDone / wGoal * 100));
+    weekRow = `<div class="ms-row ms-week"><span>本周目标</span><b>${wDone}/${wGoal}${wDone >= wGoal ? ' 🎉' : ''}</b></div>
+      <div class="ms-week-bar"><div class="ms-week-fill" style="width:${wPct}%"></div></div>`;
+  }
   $('#miniStats').innerHTML = `
     <div class="ms-row"><span>今日任务</span><b>${done}/${day.tasks.length}</b></div>
     <div class="ms-row"><span>今日专注</span><b>⏱ ${focus} 分</b></div>
     <div class="ms-row"><span>习惯打卡</span><b>${habitDone}/${habits.length}</b></div>
     <div class="ms-row"><span>笔记字数</span><b>${noteLen}</b></div>
     <div class="ms-row"><span>连续打卡</span><b>🔥 ${computeStats().streak}</b></div>
-    ${goalRow}`;
+    ${goalRow}
+    ${weekRow}`;
 }
 
 /* ============================================================
    专注计时（番茄钟）
    ============================================================ */
-const timer = { id: null, remain: 0, total: 0, mode: 'focus', round: 1, running: false };
+const timer = { id: null, remain: 0, total: 0, mode: 'focus', round: 1, running: false, taskId: '' };
+
+// 填充「关联任务」下拉：列出当天未完成任务，保留当前选择
+function renderFocusTaskSelect() {
+  const sel = $('#focusTaskSel');
+  if (!sel) return;
+  const day = getDay(state.currentDate);
+  const pending = day.tasks.filter(t => !t.done);
+  // 若当前关联的任务已不在待办列表（被完成/删除/切换日期），清空关联
+  if (timer.taskId && !pending.some(t => t.id === timer.taskId)) timer.taskId = '';
+  const opts = ['<option value="">不关联（自由专注）</option>']
+    .concat(pending.map(t => {
+      const label = (t.time ? t.time + ' ' : '') + t.title + (t.focusMin ? ` · 已专注${t.focusMin}分` : '');
+      return `<option value="${escapeHtml(t.id)}" ${t.id === timer.taskId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }));
+  sel.innerHTML = opts.join('');
+}
 const RING_LEN = 2 * Math.PI * 100;
 
 function notify(title, body) {
@@ -934,6 +1187,11 @@ function bindTimer() {
     toggleTimer();
   };
   $('#timerReset').onclick = resetTimer;
+  $('#immersiveBtn').onclick = toggleImmersive;
+  $('#immersiveExit').onclick = toggleImmersive;
+  const sel = $('#focusTaskSel');
+  if (sel) sel.onchange = (e) => { timer.taskId = e.target.value; };
+  renderFocusTaskSelect();
   resetTimer();
 }
 function resetTimer() {
@@ -958,11 +1216,36 @@ function tick() {
   if (timer.remain <= 0) {
     clearInterval(timer.id); timer.running = false;
     if (timer.mode === 'focus') {
-      updateDay(state.currentDate, d => { d.focusMinutes = (d.focusMinutes || 0) + state.settings.focusMin; });
-      toast('专注完成！已记录 ' + state.settings.focusMin + ' 分钟 ☕');
-      notify('专注完成 ☕', `已记录 ${state.settings.focusMin} 分钟，休息一下吧`);
+      const mins = state.settings.focusMin;
+      let linkedTitle = '';
+      const focusTask = timer.taskId ? (getDay(state.currentDate).tasks.find(x => x.id === timer.taskId) || null) : null;
+      const focusCat = focusTask ? focusTask.category : '未分类';
+      updateDay(state.currentDate, d => {
+        d.focusMinutes = (d.focusMinutes || 0) + mins;
+        if (!d.focusByCat) d.focusByCat = {};
+        d.focusByCat[focusCat] = (d.focusByCat[focusCat] || 0) + mins;
+        if (focusTask) {
+          const t = d.tasks.find(x => x.id === focusTask.id);
+          if (t) { t.focusMin = (t.focusMin || 0) + mins; linkedTitle = t.title; }
+        }
+      });
+      // 关联「专注型」目标：番茄钟专注自动累计进度
+      const goals = loadGoals();
+      const lkGoals = goals.filter(g => g.type === 'focus' && (g.linkCat || '') === focusCat);
+      if (lkGoals.length) {
+        lkGoals.forEach(g => {
+          const target = Math.max(1, g.focusTarget || 1);
+          const before = g.focusMin || 0;
+          g.focusMin = before + mins;
+          if (before < target && g.focusMin >= target) toast('🎉 目标达成：' + g.name);
+        });
+        saveGoals(goals);
+        renderGoals();
+      }
+      toast(linkedTitle ? `专注完成！「${linkedTitle}」+${mins} 分 ☕` : '专注完成！已记录 ' + mins + ' 分钟 ☕');
+      notify('专注完成 ☕', (linkedTitle ? `「${linkedTitle}」` : '') + `已记录 ${mins} 分钟，休息一下吧`);
       playChime();
-      renderMiniStats(); renderStats(); checkBadges();
+      renderPlan(); renderMiniStats(); renderStats(); renderFocusTaskSelect(); checkBadges();
       timer.mode = 'break'; timer.round++;
     } else {
       toast('休息结束，继续加油 💪');
@@ -993,6 +1276,7 @@ function paintTimer() {
    视图切换
    ============================================================ */
 function switchView(view) {
+  state.currentView = view;
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
   if (view === 'stats') renderStats();
@@ -1000,6 +1284,7 @@ function switchView(view) {
   if (view === 'month') renderMonth();
   if (view === 'notes' && !$('#notePreview').hidden) $('#notePreview').innerHTML = renderMarkdown($('#noteArea').value);
   if (view === 'search') renderSearch($('#searchInput').value);
+  if (view === 'focus') renderFocusTaskSelect();
 }
 
 /* ============================================================
@@ -1007,8 +1292,7 @@ function switchView(view) {
    ============================================================ */
 function toggleTheme() {
   state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', state.settings.theme);
-  $('#themeBtn').textContent = state.settings.theme === 'dark' ? '☀' : '🌙';
+  applyTheme();
   saveSettings(state.settings);
 }
 
@@ -1310,19 +1594,42 @@ function copyPlanToTomorrow() {
    ============================================================ */
 function renderSearch(q) {
   const box = $('#searchResults');
+  const tagBar = $('#tagBar');
   q = q.trim().toLowerCase();
-  if (!q) { box.innerHTML = '<p class="empty-hint">输入关键词搜索跨日期的任务与笔记</p>'; return; }
   const data = loadData();
+
+  // 标签栏：汇总全部标签，可点击筛选
+  const allTags = new Map();
+  Object.values(data).forEach(e => {
+    (e.tasks || []).forEach(t => (t.tags || []).forEach(tg => allTags.set(tg, (allTags.get(tg) || 0) + 1)));
+    extractTags(e.notes || '').forEach(tg => allTags.set(tg, (allTags.get(tg) || 0) + 1));
+  });
+  tagBar.innerHTML = allTags.size ? '<span class="tag-bar-label">标签</span>' + [...allTags.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, c]) => `<button class="tag-chip search-tag ${state.searchTag === t ? 'active' : ''}" data-tag="${escapeHtml(t)}">#${escapeHtml(t)}<i>${c}</i></button>`)
+    .join('') : '';
+  tagBar.querySelectorAll('.search-tag').forEach(b => b.onclick = () => {
+    state.searchTag = state.searchTag === b.dataset.tag ? '' : b.dataset.tag;
+    renderSearch($('#searchInput').value);
+  });
+
+  if (!q && !state.searchTag) { box.innerHTML = '<p class="empty-hint">输入关键词，或点上方标签筛选跨日期的任务与笔记</p>'; return; }
   const results = [];
   Object.keys(data).sort().reverse().forEach(ds => {
     const e = data[ds];
     const items = [];
-    e.tasks.forEach(t => {
-      if (t.title.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
-        items.push(`<li><span class="sr-tag">任务</span>${highlight(t.title, q)} <span style="color:var(--text-soft)">· ${escapeHtml(t.category)} ${t.done ? '✅' : '⬜'}</span></li>`);
+    (e.tasks || []).forEach(t => {
+      const tagHit = state.searchTag ? (t.tags || []).includes(state.searchTag) : true;
+      const qHit = !q || t.title.toLowerCase().includes(q) || t.category.toLowerCase().includes(q);
+      if (tagHit && qHit)
+        items.push(`<li><span class="sr-tag">任务</span>${highlight(t.title, q || state.searchTag)} <span style="color:var(--text-soft)">· ${escapeHtml(t.category)} ${t.done ? '✅' : '⬜'}${(t.tags || []).map(tg => ' #' + escapeHtml(tg)).join('')}</span></li>`);
     });
-    if (e.notes && e.notes.toLowerCase().includes(q))
-      items.push(`<li><span class="sr-tag">笔记</span>${highlight(e.notes, q, 80)}</li>`);
+    if (e.notes) {
+      const nt = extractTags(e.notes);
+      const tagHit = state.searchTag ? nt.includes(state.searchTag) : true;
+      const qHit = !q || e.notes.toLowerCase().includes(q);
+      if (tagHit && qHit) items.push(`<li><span class="sr-tag">笔记</span>${highlight(e.notes, q || state.searchTag, 80)}</li>`);
+    }
     if (items.length) results.push(`<div class="search-day"><div class="search-day-head">${ds} ${weekdayCN(ds)}</div><ul>${items.join('')}</ul></div>`);
   });
   box.innerHTML = results.length ? results.join('') : '<p class="empty-hint">未找到匹配内容</p>';
@@ -1430,7 +1737,7 @@ function checkBadges() {
   if (s.focusTotal >= 500) tryAward('focus_500');
   if (Object.values(data).some(d => d.notes && d.notes.trim())) tryAward('note_first');
   if (todayDay.tasks.length >= 3 && todayDay.tasks.every(t => t.done)) tryAward('perfect_day');
-  if (loadGoals().some(g => (g.current || 0) >= Math.max(1, g.target || 1))) tryAward('goal_done');
+  if (loadGoals().some(g => goalReached(g))) tryAward('goal_done');
 
   // 早鸟 / 夜猫子
   Object.values(data).forEach(d => {
@@ -1539,6 +1846,11 @@ function deleteHabit(id) {
 /* ============================================================
    学习目标（长期）
    ============================================================ */
+function goalReached(g) {
+  const t = g.type === 'focus' ? Math.max(1, g.focusTarget || 1) : Math.max(1, g.target || 1);
+  const c = g.type === 'focus' ? Math.max(0, g.focusMin || 0) : Math.max(0, g.current || 0);
+  return c >= t;
+}
 function renderGoals() {
   const goals = loadGoals();
   const list = $('#goalsList');
@@ -1549,10 +1861,13 @@ function renderGoals() {
   }
   const todayStr = fmtDate(new Date());
   list.innerHTML = goals.map(g => {
-    const target = Math.max(1, g.target || 1);
-    const cur = Math.max(0, g.current || 0);
+    const isFocus = g.type === 'focus';
+    const target = isFocus ? Math.max(1, g.focusTarget || 1) : Math.max(1, g.target || 1);
+    const cur = isFocus ? Math.max(0, g.focusMin || 0) : Math.max(0, g.current || 0);
     const pct = Math.min(100, Math.round(cur / target * 100));
-    const reached = cur >= target;
+    const reached = goalReached(g);
+    const unit = isFocus ? '分' : (g.unit || '');
+    const sub = isFocus ? `<span class="goal-sub">🍅 ${escapeHtml(g.linkCat || '未分类')}</span>` : '';
     let ddl = '';
     if (g.deadline) {
       const left = Math.round((parseDate(g.deadline) - parseDate(todayStr)) / 86400000);
@@ -1560,19 +1875,20 @@ function renderGoals() {
         : left === 0 ? `<span class="goal-ddl soon">今天截止</span>`
         : `<span class="goal-ddl${left <= 3 ? ' soon' : ''}">剩 ${left} 天</span>`);
     }
+    const btns = isFocus
+      ? '<span class="goal-auto">番茄钟自动累计</span>'
+      : `<div class="goal-btns"><button class="goal-dec" data-act="dec" title="减一">−</button><button class="goal-inc" data-act="inc" title="加一">＋</button></div>`;
     return `
       <li data-id="${g.id}" class="${reached ? 'reached' : ''}">
         <div class="goal-top">
           <span class="goal-name">${reached ? '🏆 ' : ''}${escapeHtml(g.name)}</span>
-          <span class="goal-num">${cur}/${target}${g.unit ? ' ' + escapeHtml(g.unit) : ''}</span>
+          <span class="goal-num">${cur}/${target}${unit ? ' ' + escapeHtml(unit) : ''}</span>
         </div>
+        ${sub}
         <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:${pct}%"></div></div>
         <div class="goal-foot">
           ${ddl || '<span class="goal-ddl none"></span>'}
-          <div class="goal-btns">
-            <button class="goal-dec" data-act="dec" title="减一">−</button>
-            <button class="goal-inc" data-act="inc" title="加一">＋</button>
-          </div>
+          ${btns}
         </div>
       </li>`;
   }).join('');
@@ -1587,32 +1903,46 @@ function renderGoals() {
 function incGoal(id, delta) {
   const goals = loadGoals();
   const g = goals.find(x => x.id === id);
-  if (!g) return;
+  if (!g || g.type === 'focus') return;
   const target = Math.max(1, g.target || 1);
   const before = g.current || 0;
   g.current = Math.max(0, before + delta);
   saveGoals(goals);
   renderGoals();
-  if (before < target && g.current >= target) {
+  if (before < target && goalReached(g)) {
     toast('🎉 目标达成：' + g.name);
     checkBadges();
   }
 }
 function openGoalModal() {
   $('#goalModal').hidden = false;
+  $('#goalNewCat').innerHTML = state.settings.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  bindGoalTypeToggle();
   renderGoalEditList();
   $('#goalNewName').focus();
+}
+function bindGoalTypeToggle() {
+  const sync = () => {
+    const focus = document.querySelector('input[name="goalType"]:checked').value === 'focus';
+    $('#goalNewTarget').style.display = focus ? 'none' : '';
+    $('#goalNewUnit').style.display = focus ? 'none' : '';
+    $('#goalNewCat').hidden = !focus;
+    $('#goalNewFocusTarget').hidden = !focus;
+  };
+  $$('input[name="goalType"]').forEach(r => r.onchange = sync);
+  sync();
 }
 function renderGoalEditList() {
   const goals = loadGoals();
   const list = $('#goalEditList');
   list.innerHTML = goals.length ? goals.map(g => {
-    const cur = Math.max(0, g.current || 0);
-    const target = Math.max(1, g.target || 1);
+    const meta = g.type === 'focus'
+      ? `🍅 ${g.focusMin || 0}/${g.focusTarget}分 · ${escapeHtml(g.linkCat || '未分类')}`
+      : `${Math.max(0, g.current || 0)}/${Math.max(1, g.target || 1)}${g.unit ? ' ' + escapeHtml(g.unit) : ''}`;
     return `
     <li data-id="${g.id}">
       <span class="goal-edit-name">${escapeHtml(g.name)}</span>
-      <span class="goal-edit-meta">${cur}/${target}${g.unit ? ' ' + escapeHtml(g.unit) : ''}${g.deadline ? ' · ' + g.deadline : ''}</span>
+      <span class="goal-edit-meta">${meta}${g.deadline ? ' · ' + g.deadline : ''}</span>
       <button class="habit-del" data-act="del" title="删除">×</button>
     </li>`;
   }).join('') : '<li class="tpl-empty">还没有目标，添加一个吧</li>';
@@ -1623,16 +1953,31 @@ function renderGoalEditList() {
 function addGoal() {
   const name = $('#goalNewName').value.trim();
   if (!name) { toast('请输入目标名称'); return; }
-  const target = Math.max(1, parseInt($('#goalNewTarget').value, 10) || 1);
-  const unit = $('#goalNewUnit').value.trim();
+  const type = document.querySelector('input[name="goalType"]:checked').value;
   const deadline = $('#goalNewDeadline').value || '';
   const goals = loadGoals();
   if (goals.some(g => g.name === name)) { toast('同名目标已存在'); return; }
-  goals.push({ id: uid(), name, target, unit, current: 0, deadline, created: fmtDate(new Date()) });
+  let goal;
+  if (type === 'focus') {
+    goal = {
+      id: uid(), name, type,
+      focusTarget: Math.max(1, parseInt($('#goalNewFocusTarget').value, 10) || 1),
+      linkCat: $('#goalNewCat').value || '未分类',
+      focusMin: 0, deadline, created: fmtDate(new Date()),
+    };
+  } else {
+    goal = {
+      id: uid(), name, type: 'count',
+      target: Math.max(1, parseInt($('#goalNewTarget').value, 10) || 1),
+      unit: $('#goalNewUnit').value.trim(),
+      current: 0, deadline, created: fmtDate(new Date()),
+    };
+  }
+  goals.push(goal);
   saveGoals(goals);
-  $('#goalNewName').value = ''; $('#goalNewTarget').value = ''; $('#goalNewUnit').value = ''; $('#goalNewDeadline').value = '';
+  $('#goalNewName').value = ''; $('#goalNewTarget').value = ''; $('#goalNewUnit').value = ''; $('#goalNewFocusTarget').value = ''; $('#goalNewDeadline').value = '';
   renderGoalEditList(); renderGoals();
-  toast('已添加目标');
+  toast(type === 'focus' ? '已添加专注型目标（番茄钟自动累计）' : '已添加目标');
 }
 function deleteGoal(id) {
   let goals = loadGoals();
@@ -1731,6 +2076,75 @@ function reviewExport() {
   const dates = weekRange();
   download(`周复盘-${dates[0]}.md`, $('#reviewText').value, 'text/markdown');
   toast('已导出周复盘');
+}
+
+/* ============================================================
+   今日复盘（轻量，结束一天时填写；写入今日笔记并与周复盘联动）
+   ============================================================ */
+function openDayReview() {
+  $('#drDate').textContent = state.currentDate;
+  $('#drBest').value = ''; $('#drImprove').value = ''; $('#drTomorrow').value = '';
+  drSetRating(0);
+  $('#dayReviewModal').hidden = false;
+}
+function drSetRating(n) {
+  $('#drRating').value = n;
+  $$('#drStars .star').forEach(s => s.classList.toggle('on', +s.dataset.star <= n));
+}
+function saveDayReview() {
+  const best = $('#drBest').value.trim();
+  const imp = $('#drImprove').value.trim();
+  const tom = $('#drTomorrow').value.trim();
+  const rating = +$('#drRating').value;
+  if (!best && !imp && !tom && !rating) { toast('写点什么再保存吧'); return; }
+  const lines = [
+    '## 今日复盘（' + state.currentDate + '）',
+    rating ? '- ⭐ 评分：' + rating + '/5' : '- ⭐ 评分：未评',
+    '- 最满意：' + (best || '—'),
+    '- 可改进：' + (imp || '—'),
+    '- 明天首要：' + (tom || '—'),
+  ];
+  const md = lines.join('\n');
+  const cur = getDay(state.currentDate).notes || '';
+  const merged = cur.trim() ? cur.trimEnd() + '\n\n' + md : md;
+  updateDay(state.currentDate, d => d.notes = merged);
+  $('#noteArea').value = merged; updateNoteCount();
+  renderMiniStats(); renderCalendar();
+  $('#dayReviewModal').hidden = true;
+  toast('复盘已写入今日笔记');
+}
+
+/* ---------- 外观设置（自定义主题色） ---------- */
+function openAppearanceModal() {
+  $('#appearanceModal').hidden = false;
+  renderAccentSwatches();
+  $('#accentCustom').value = state.settings.accent || '#3b6cf6';
+  $('#accentHex').textContent = state.settings.accent || '#3b6cf6';
+}
+function renderAccentSwatches() {
+  const cur = (state.settings.accent || '#3b6cf6').toLowerCase();
+  $('#accentSwatches').innerHTML = ACCENT_PRESETS.map(c =>
+    `<button class="accent-swatch${c.toLowerCase() === cur ? ' active' : ''}" data-accent="${c}" style="background:${c}" title="${c}"></button>`
+  ).join('');
+  $$('#accentSwatches .accent-swatch').forEach(b => {
+    b.onclick = () => setAccent(b.dataset.accent);
+  });
+}
+function setAccent(hex) {
+  state.settings.accent = hex;
+  saveSettings(state.settings);
+  applyAccent();
+  renderAccentSwatches();
+  $('#accentCustom').value = hex;
+  $('#accentHex').textContent = hex;
+  toast('已更新主题色');
+}
+
+/* ---------- 专注沉浸模式 ---------- */
+function toggleImmersive() {
+  const on = document.body.classList.toggle('immersive');
+  $('#immersiveBtn').textContent = on ? '退出沉浸' : '沉浸';
+  if (on) $('#immersiveExit').hidden = false; else $('#immersiveExit').hidden = true;
 }
 
 /* ---------- 启动 ---------- */

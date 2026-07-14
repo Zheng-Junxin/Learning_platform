@@ -44,6 +44,8 @@
           <button data-act="cats">🏷 管理分类</button>
           <button data-act="habits">🌟 习惯管理</button>
           <button data-act="goals">🎯 学习目标</button>
+          <button data-act="backup">💾 数据保险箱</button>
+          <button data-act="appearance">🎨 外观设置</button>
           <button data-act="tpl">📑 计划模板</button>
           <button data-act="exportAll">💾 导出全部数据</button>
           <button data-act="import">📥 导入数据</button>
@@ -111,6 +113,7 @@
             <div class="day-rating" id="dayRating" title="给今天打个分（1-5 星，再点一次取消）"></div>
           </div>
           <div class="plan-head-right">
+            <button class="text-btn" id="reviewDayBtn" title="写今日复盘，沉淀到笔记">📝 今日复盘</button>
             <button class="text-btn" id="copyPlanBtn" title="把今日未完成任务复制到明天">⧉ 复制到明天</button>
             <div class="plan-progress">
               <div class="progress-bar"><div class="progress-fill" id="planProgressFill"></div></div>
@@ -202,6 +205,9 @@
       <section class="view" id="view-stats">
         <div class="view-head">
           <h2>学习统计</h2>
+          <div class="weekly-goal-ctrl">
+            <span>本周目标</span>🎯<input type="number" id="weeklyGoalInput" min="0" max="200" placeholder="任务数" />
+          </div>
           <button class="text-btn" id="reviewBtn" title="汇总本周数据生成复盘报告">📋 生成本周复盘</button>
         </div>
         <div class="stat-cards" id="statCards"></div>
@@ -225,6 +231,15 @@
           <div class="bar-chart" id="focusChart"></div>
         </div>
         <div class="stat-block">
+          <h3>时间都花在哪（专注主题）</h3>
+          <div class="cat-chart" id="focusThemeChart"></div>
+        </div>
+        <div class="stat-block">
+          <h3>近两周专注主题对比</h3>
+          <div class="trend-legend"><span class="tk this">本周</span><span class="tk last">上周</span></div>
+          <div class="cat-chart" id="focusTrendChart"></div>
+        </div>
+        <div class="stat-block">
           <h3>分类分布</h3>
           <div class="cat-chart" id="catChart"></div>
         </div>
@@ -244,9 +259,15 @@
             <div class="timer-round" id="timerRound">第 1 轮</div>
           </div>
         </div>
+        <div class="focus-link">
+          <label>关联任务
+            <select id="focusTaskSel"><option value="">不关联（自由专注）</option></select>
+          </label>
+        </div>
         <div class="timer-controls">
           <button class="primary-btn" id="timerToggle">开始</button>
           <button class="text-btn" id="timerReset">重置</button>
+          <button class="text-btn" id="immersiveBtn" title="沉浸模式（快捷键 F）">🖥 沉浸</button>
         </div>
         <div class="timer-settings">
           <label>专注时长
@@ -257,13 +278,15 @@
           </label>
           <label class="sound-toggle"><input type="checkbox" id="soundOn" /> 完成提示音</label>
         </div>
-        <p class="focus-tip">提示：开始专注后页面可最小化，专注/休息结束会弹系统通知（首次会请求授权）。</p>
+        <p class="focus-tip">提示：开始专注后页面可最小化，专注/休息结束会弹系统通知（首次会请求授权）。点「沉浸」可进入全屏专注，按 Esc 退出。</p>
+        <button class="immersive-exit" id="immersiveExit" hidden>✕ 退出沉浸 (Esc)</button>
       </section>
 
       <!-- 搜索视图 -->
       <section class="view" id="view-search">
         <div class="view-head"><h2>全局搜索</h2></div>
         <input type="text" id="searchInput" class="search-input" placeholder="搜索任务标题、笔记内容……" />
+        <div class="tag-bar" id="tagBar"></div>
         <div class="search-results" id="searchResults"></div>
       </section>
     </main>
@@ -311,13 +334,19 @@
         <h3>学习目标</h3>
         <button class="icon-btn" id="goalClose" title="关闭">×</button>
       </div>
-      <p class="modal-sub">设定可量化的长期目标（如「读完 10 本书」），在侧边栏用 ＋ 记录进度。</p>
+      <p class="modal-sub">设定可量化的长期目标：计数型手动 ＋ 记录，专注型由番茄钟自动累计。</p>
       <ul class="goal-edit-list" id="goalEditList"></ul>
       <div class="goal-add">
         <input type="text" id="goalNewName" placeholder="目标名称，如：读完 10 本专业书" maxlength="30" />
+        <div class="goal-type">
+          <label><input type="radio" name="goalType" value="count" checked /> 计数型（手动 ＋）</label>
+          <label><input type="radio" name="goalType" value="focus" /> 专注型（番茄钟自动累计）</label>
+        </div>
         <div class="goal-add-row">
           <input type="number" id="goalNewTarget" min="1" max="9999" placeholder="目标数" />
           <input type="text" id="goalNewUnit" placeholder="单位(如 本/题)" maxlength="6" />
+          <select id="goalNewCat" hidden></select>
+          <input type="number" id="goalNewFocusTarget" min="1" max="99999" placeholder="目标专注分钟" hidden />
           <input type="date" id="goalNewDeadline" title="截止日期(可选)" />
           <button class="primary-btn" id="goalAddBtn">添加</button>
         </div>
@@ -338,6 +367,68 @@
         <button class="text-btn" id="reviewCopyBtn">📋 复制</button>
         <button class="text-btn" id="reviewInsertBtn">📝 插入今日笔记</button>
         <button class="primary-btn" id="reviewExportBtn">⬇ 导出 Markdown</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 今日复盘弹窗 -->
+  <div class="modal-mask" id="dayReviewModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>今日复盘</h3>
+        <button class="icon-btn" id="drClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">📅 <b id="drDate"></b> · 用 1 分钟沉淀今天，写下的内容会自动存进今日笔记，周末复盘时也能串起来。</p>
+      <div class="dr-rating">
+        <span class="dr-rating-label">今天给自己打几分？</span>
+        <div class="day-rating" id="drStars">
+          <button type="button" class="star" data-star="1">★</button>
+          <button type="button" class="star" data-star="2">★</button>
+          <button type="button" class="star" data-star="3">★</button>
+          <button type="button" class="star" data-star="4">★</button>
+          <button type="button" class="star" data-star="5">★</button>
+        </div>
+        <input type="hidden" id="drRating" value="0" />
+      </div>
+      <label class="dr-field"><span>今天最满意的一件事</span><textarea id="drBest" rows="2" placeholder="哪怕很小，也值得记下来"></textarea></label>
+      <label class="dr-field"><span>哪里可以做得更好</span><textarea id="drImprove" rows="2" placeholder="一个可改进点就够"></textarea></label>
+      <label class="dr-field"><span>明天最重要的一件事</span><input type="text" id="drTomorrow" placeholder="明天优先做的一件事" maxlength="60" /></label>
+      <div class="review-actions">
+        <button class="text-btn" id="drClose2">稍后写</button>
+        <button class="primary-btn" id="drSave">保存到笔记</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 数据保险箱弹窗 -->
+  <div class="modal-mask" id="backupModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>数据保险箱</h3>
+        <button class="icon-btn" id="backupClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">修改数据后约 4 秒会自动生成当天备份（浏览器内保留最近 7 份），防止误清缓存丢数据。也可随时「立即备份」。</p>
+      <button class="primary-btn" id="backupNowBtn" style="margin-bottom:14px">＋ 立即备份当前数据</button>
+      <ul class="goal-edit-list" id="backupList"></ul>
+    </div>
+  </div>
+
+  <!-- 外观设置弹窗 -->
+  <div class="modal-mask" id="appearanceModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>🎨 外观设置</h3>
+        <button class="icon-btn" id="appearanceClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">挑一个主题色，全站按钮、进度、高亮会立刻换上新装；深色模式下会自动提亮保证可读性。</p>
+      <div class="accent-row">
+        <span class="accent-label">预设</span>
+        <div class="accent-swatches" id="accentSwatches"></div>
+      </div>
+      <div class="accent-row">
+        <span class="accent-label">自定义</span>
+        <input type="color" id="accentCustom" value="#3b6cf6" />
+        <span class="accent-hex" id="accentHex">#3b6cf6</span>
       </div>
     </div>
   </div>

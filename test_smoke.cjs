@@ -375,6 +375,175 @@ setTimeout(() => {
     doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     assert($('#reviewModal').hidden === true, 'Esc 关闭复盘弹窗');
 
+    // 37. 标签：解析与渲染
+    window.switchView('plan');
+    $('#datePicker').value = '2032-03-03';
+    $('#datePicker').dispatchEvent(new window.Event('change', { bubbles: true }));
+    $('#taskTitle').value = '整理算法笔记 #算法 #复盘';
+    $('#taskForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true }));
+    const tagged = JSON.parse(window.localStorage.getItem('learnlog_data_v1'))['2032-03-03'].tasks.slice(-1)[0];
+    assert(tagged.tags.includes('算法') && tagged.tags.includes('复盘'), '任务标签解析并存储（tags=' + (tagged.tags || []).join(',') + '）');
+    assert($$('#taskList .task-item').some(li => li.textContent.includes('#算法')), '任务列表渲染标签 chip');
+
+    // 38. 周目标进度
+    window.switchView('stats');
+    $('#weeklyGoalInput').value = '3';
+    $('#weeklyGoalInput').dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert($('#miniStats').innerHTML.includes('本周目标'), '周目标显示于迷你统计');
+    assert($('#statCards').innerHTML.includes('本周目标完成'), '周目标显示于统计卡片');
+    const w0 = window.weeklyDoneCount();
+    const lastTaskId = $$('#taskList .task-item').slice(-1)[0].dataset.id;
+    window.toggleTask(lastTaskId);
+    const w1 = window.weeklyDoneCount();
+    assert(w1 === w0 + 1, '完成本周任务后周完成数 +1（' + w0 + '→' + w1 + '）');
+
+    // 39. 今日复盘写入笔记
+    window.switchView('plan');
+    $('#reviewDayBtn').click();
+    assert($('#dayReviewModal').hidden === false, '今日复盘弹窗可打开');
+    $('#drStars').querySelectorAll('.star')[3].click();
+    assert($('#drRating').value === '4', '复盘评分可设置（实际 ' + $('#drRating').value + '）');
+    $('#drBest').value = '完成平台开发';
+    $('#drTomorrow').value = '写总结';
+    $('#drSave').click();
+    const dn = JSON.parse(window.localStorage.getItem('learnlog_data_v1'))['2032-03-03'].notes || '';
+    assert(dn.includes('今日复盘') && dn.includes('完成平台开发') && dn.includes('明天首要'), '复盘内容写入今日笔记');
+    assert($('#dayReviewModal').hidden === true, '保存后复盘弹窗关闭');
+
+    // 40. 搜索标签栏与筛选
+    window.switchView('search');
+    $('#searchInput').value = '';
+    $('#searchInput').dispatchEvent(new window.Event('input', { bubbles: true }));
+    const tagBtn = $$('#tagBar .search-tag').find(b => b.dataset.tag === '算法');
+    assert(tagBtn !== undefined, '搜索页标签栏渲染标签 #算法');
+    tagBtn.click();
+    assert($('#searchResults').textContent.includes('算法'), '点击标签筛选命中含该标签的任务');
+    $$('#tagBar .search-tag').find(b => b.dataset.tag === '算法').click();
+    assert($('#searchResults').textContent.includes('输入关键词') || $('#searchResults').textContent.includes('点上方标签'), '再次点击标签取消筛选');
+
+    // 41. 数据保险箱：手动备份 / 全量 / 数量上限
+    window.saveSnapshot('manual');
+    let bks = window.loadBackups();
+    assert(bks.length >= 1, '手动备份写入（实际 ' + bks.length + '）');
+    assert(bks[0] && bks[0].data && bks[0].data['learnlog_data_v1'] !== undefined, '快照包含全量数据');
+    for (let i = 0; i < 10; i++) window.saveSnapshot('manual');
+    assert(window.loadBackups().length <= 7, '备份数量不超过 7 份（实际 ' + window.loadBackups().length + '）');
+
+    // 42. 恢复备份
+    window.switchView('stats');
+    $('#weeklyGoalInput').value = '5';
+    $('#weeklyGoalInput').dispatchEvent(new window.Event('change', { bubbles: true }));
+    const snap = window.saveSnapshot('manual');
+    const bkBefore = JSON.parse(window.localStorage.getItem('learnlog_settings_v1')).weeklyGoal;
+    $('#weeklyGoalInput').value = '99';
+    $('#weeklyGoalInput').dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert(JSON.parse(window.localStorage.getItem('learnlog_settings_v1')).weeklyGoal === 99, '改值生效（99）');
+    window.restoreSnapshot(snap.ts);
+    const bkAfter = JSON.parse(window.localStorage.getItem('learnlog_settings_v1')).weeklyGoal;
+    assert(bkAfter === bkBefore, '恢复备份后回到快照值（' + bkBefore + '→' + bkAfter + '）');
+
+    // 43. 保险箱弹窗：打开 / 列表 / Esc 关闭
+    $('#gearBtn').click();
+    $('#settingsMenu').querySelector('[data-act="backup"]').click();
+    assert($('#backupModal').hidden === false, '保险箱弹窗可打开');
+    assert($$('#backupList li[data-ts]').length >= 1, '保险箱列表渲染快照');
+    $('#backupModal').hidden = true;
+    window.openBackupModal();
+    doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert($('#backupModal').hidden === true, 'Esc 关闭保险箱弹窗');
+
+    // 44-48. 专注联动任务
+    $('#taskTitle').value = '专注联动测试任务';
+    $('#taskForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true }));
+    const fkId = $$('#taskList .task-item').slice(-1)[0].dataset.id;
+    window.renderFocusTaskSelect();
+    assert($$('#focusTaskSel option').some(o => o.textContent.includes('专注联动测试任务')), '关联任务下拉列出待办任务');
+    const fkSel = $('#focusTaskSel');
+    fkSel.value = fkId;
+    fkSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert($('#focusTaskSel').value === fkId, '关联任务下拉选中目标任务');
+    // 设专注时长为 1 分钟并驱动 tick 至完成
+    $('#focusMin').value = '1';
+    $('#focusMin').dispatchEvent(new window.Event('change', { bubbles: true }));
+    for (let i = 0; i < 60; i++) window.tick();
+    let fkDay = null;
+    Object.values(window.loadData()).forEach(d => { if (d.tasks && d.tasks.some(t => t.id === fkId)) fkDay = d; });
+    const fkTt = fkDay && fkDay.tasks.find(x => x.id === fkId);
+    assert(fkTt && fkTt.focusMin === 1, '专注完成后时长计入关联任务（' + (fkTt && fkTt.focusMin) + '）');
+    assert(fkDay.focusByCat && Object.values(fkDay.focusByCat).some(v => v >= 1), '专注时长按主题记入 focusByCat');
+    window.renderPlan();
+    assert($('#taskList').textContent.includes('⏱'), '任务列表显示累计专注 chip');
+    window.switchView('stats');
+    assert($('#focusThemeChart').textContent.includes('分'), '统计页渲染专注主题分布');
+
+    // 49-53. 专注型目标联动 + 近两周主题对比
+    // 前面的用例可能改过当前日期；先把日期拨回今天，保证专注记录落在“本周”
+    const flToday = window.fmtDate(new Date());
+    $('#datePicker').value = flToday;
+    $('#datePicker').dispatchEvent(new window.Event('change', { bubbles: true }));
+    // 在“今天”新建一个关联任务
+    $('#taskTitle').value = '专注型目标联动任务';
+    $('#taskForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true }));
+    const flId = $$('#taskList .task-item').slice(-1)[0].dataset.id;
+    window.renderFocusTaskSelect();
+    const flSel = $('#focusTaskSel');
+    flSel.value = flId;
+    flSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert($('#focusTaskSel').value === flId, '关联任务下拉选中今日任务');
+    // 读取目标任务实际分类，动态绑定（避免写死）
+    let flCat = '学习';
+    Object.values(window.loadData()).forEach(d => { const t = d.tasks && d.tasks.find(x => x.id === flId); if (t) flCat = t.category; });
+    window.openGoalModal();
+    const gFocusRadio = window.document.querySelector('input[name="goalType"][value="focus"]');
+    gFocusRadio.checked = true;
+    window.document.querySelector('input[name="goalType"][value="count"]').checked = false;
+    gFocusRadio.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert($('#goalNewCat').hidden === false && $('#goalNewFocusTarget').hidden === false, '选专注型后显示分类/分钟字段');
+    $('#goalNewName').value = '算法专注目标';
+    $('#goalNewCat').value = flCat;
+    $('#goalNewFocusTarget').value = '1';
+    $('#goalAddBtn').click();
+    const fGoals = window.loadGoals();
+    const fGoal = fGoals.find(g => g.type === 'focus');
+    assert(fGoal && fGoal.linkCat === flCat && fGoal.focusTarget === 1, '添加专注型目标（分类/分钟）');
+    window.renderGoals();
+    assert($('#goalsList').textContent.includes('分'), '专注型目标显示「分」进度');
+    assert($('#goalsList').textContent.includes('🍅'), '专注型目标显示番茄钟标记');
+    // 重置番茄钟到专注态（专注/休息都设 1 分钟），跑满一轮专注
+    $('#focusMin').value = '1'; $('#focusMin').dispatchEvent(new window.Event('change', { bubbles: true }));
+    $('#breakMin').value = '1'; $('#breakMin').dispatchEvent(new window.Event('change', { bubbles: true }));
+    window.resetTimer();
+    for (let i = 0; i < 120; i++) window.tick();
+    const fGoal2 = window.loadGoals().find(g => g.type === 'focus');
+    assert(fGoal2 && fGoal2.focusMin >= 1, '番茄钟专注自动累计到专注型目标（' + (fGoal2 && fGoal2.focusMin) + ' 分）');
+    assert($('#goalsList').textContent.includes('🏆') || $('#goalsList').querySelector('.reached'), '专注型目标达成显示 🏆');
+    window.switchView('stats');
+    assert($('#focusTrendChart').textContent.includes(flCat), '近两周主题对比含本周主题（' + flCat + '）');
+    $('#goalModal').hidden = true; // 关掉上一轮打开的目标弹窗，避免影响后续 Esc 测试
+
+    // 54-58. 外观设置（自定义主题色）+ 专注沉浸模式
+    window.openAppearanceModal();
+    assert($('#appearanceModal').hidden === false, '打开外观设置弹窗');
+    assert($$('#accentSwatches .accent-swatch').length === 8, '渲染 8 个预设主题色');
+    const purple = '#7c4dff';
+    $$('#accentSwatches .accent-swatch').find(b => b.dataset.accent === purple).click();
+    assert(window.loadSettings().accent === purple, '点击预设色更新 accent 设置（' + window.loadSettings().accent + '）');
+    assert(doc.documentElement.style.getPropertyValue('--primary') !== '', '写入 --primary CSS 变量');
+    assert($$('#accentSwatches .accent-swatch').find(b => b.dataset.accent === purple).classList.contains('active'), '选中的预设色高亮');
+    $('#accentCustom').value = '#12ab34';
+    $('#accentCustom').dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert(window.loadSettings().accent === '#12ab34', '自定义取色器更新 accent（' + window.loadSettings().accent + '）');
+    $('#appearanceClose').click();
+    assert($('#appearanceModal').hidden === true, '关闭外观设置弹窗');
+    // 沉浸模式
+    window.switchView('focus');
+    assert($('#immersiveBtn').textContent.includes('沉浸'), '专注页显示沉浸按钮');
+    $('#immersiveBtn').click();
+    assert(doc.body.classList.contains('immersive'), '点击进入沉浸模式（body.immersive）');
+    assert($('#immersiveExit').hidden === false, '沉浸模式显示退出按钮');
+    doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert(!doc.body.classList.contains('immersive'), 'Esc 退出沉浸模式');
+
     console.log(results.join('\n'));
     console.log(errors.length ? ('\nRUNTIME_ERRORS:\n' + errors.join('\n')) : '\nNO_RUNTIME_ERRORS');
     const failed = results.filter(r => r.startsWith('FAIL')).length;
