@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>学习记录平台</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#3b6cf6" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">📚</span>
+      <span class="brand-name">学习记录平台</span>
+    </div>
+
+    <div class="date-nav">
+      <button class="icon-btn" id="prevDay" title="前一天">‹</button>
+      <input type="date" id="datePicker" />
+      <button class="icon-btn" id="nextDay" title="后一天">›</button>
+      <button class="text-btn" id="todayBtn">今天</button>
+      <span class="weekday" id="weekdayLabel"></span>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="text-btn" id="searchBtn" title="全局搜索">🔍 搜索</button>
+      <div class="export-wrap">
+        <button class="text-btn" id="exportBtn">⬇ 导出 ▾</button>
+        <div class="export-menu" id="exportMenu" hidden>
+          <button data-export="md">导出 Markdown（当日）</button>
+          <button data-export="csv">导出 CSV（当日）</button>
+          <button data-export="pdf">导出 PDF（打印）</button>
+          <button data-export="week">导出本周（Markdown）</button>
+          <button data-export="month">导出本月（Markdown）</button>
+        </div>
+      </div>
+      <div class="export-wrap">
+        <button class="icon-btn" id="gearBtn" title="设置">⚙</button>
+        <div class="export-menu" id="settingsMenu" hidden>
+          <button data-act="cats">🏷 管理分类</button>
+          <button data-act="habits">🌟 习惯管理</button>
+          <button data-act="goals">🎯 学习目标</button>
+          <button data-act="tpl">📑 计划模板</button>
+          <button data-act="exportAll">💾 导出全部数据</button>
+          <button data-act="import">📥 导入数据</button>
+          <button data-act="sample">✨ 生成示例数据</button>
+          <button data-act="help">⌨ 快捷键</button>
+          <button data-act="clear" class="danger">🗑 清空全部数据</button>
+        </div>
+      </div>
+      <button class="focus-badge" id="focusBadge" hidden title="专注计时进行中，点击前往">⏱ <span id="focusBadgeTime">25:00</span> · <span id="focusBadgeMode">专注</span></button>
+      <button class="icon-btn" id="themeBtn" title="切换深色模式">🌙</button>
+    </div>
+    <input type="file" id="importFile" accept="application/json,.json" hidden />
+  </header>
+
+  <div class="layout">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <nav class="side-nav">
+        <button class="nav-item active" data-view="plan"><span>📋</span>今日计划</button>
+        <button class="nav-item" data-view="week"><span>🗓</span>周视图</button>
+        <button class="nav-item" data-view="month"><span>📅</span>月视图</button>
+        <button class="nav-item" data-view="notes"><span>📝</span>笔记</button>
+        <button class="nav-item" data-view="stats"><span>📊</span>统计</button>
+        <button class="nav-item" data-view="focus"><span>⏱</span>专注计时</button>
+      </nav>
+
+      <div class="calendar-card">
+        <div class="cal-head">
+          <button class="icon-btn sm" id="calPrev">‹</button>
+          <span id="calTitle"></span>
+          <button class="icon-btn sm" id="calNext">›</button>
+        </div>
+        <div class="cal-weekdays">
+          <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+      </div>
+
+      <div class="mini-stats" id="miniStats"></div>
+
+      <div class="habits-card" id="habitsCard">
+        <div class="habits-head">
+          <span>🌟 今日习惯</span>
+          <button class="text-btn sm" id="habitManageBtn">管理</button>
+        </div>
+        <ul class="habits-list" id="habitsList"></ul>
+      </div>
+
+      <div class="goals-card" id="goalsCard">
+        <div class="habits-head">
+          <span>🎯 学习目标</span>
+          <button class="text-btn sm" id="goalManageBtn">管理</button>
+        </div>
+        <ul class="goals-list" id="goalsList"></ul>
+      </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <main class="content">
+      <!-- 计划视图 -->
+      <section class="view active" id="view-plan">
+        <div class="view-head">
+          <div class="plan-title-wrap">
+            <h2 id="planDateTitle">计划</h2>
+            <div class="day-rating" id="dayRating" title="给今天打个分（1-5 星，再点一次取消）"></div>
+          </div>
+          <div class="plan-head-right">
+            <button class="text-btn" id="copyPlanBtn" title="把今日未完成任务复制到明天">⧉ 复制到明天</button>
+            <div class="plan-progress">
+              <div class="progress-bar"><div class="progress-fill" id="planProgressFill"></div></div>
+              <span id="planProgressText">0/0</span>
+              <span class="goal-wrap" title="设定今日目标任务数">
+                🎯<input type="number" id="goalInput" min="0" max="50" placeholder="目标" />
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <form class="task-form" id="taskForm">
+          <input type="time" id="taskTime" />
+          <input type="text" id="taskTitle" placeholder="今天要做什么？" maxlength="120" required />
+          <select id="taskCategory"></select>
+          <select id="taskPriority">
+            <option value="高">高优先级</option>
+            <option value="中" selected>中优先级</option>
+            <option value="低">低优先级</option>
+          </select>
+          <button type="submit" class="primary-btn">添加</button>
+        </form>
+        <p class="quick-hint">💡 快速输入：在标题里直接写 <code>09:30 背单词 #学习 !高</code>，自动识别时间 / 分类 / 优先级</p>
+
+        <div class="filter-tabs" id="taskFilter">
+          <button class="chip active" data-filter="all">全部</button>
+          <button class="chip" data-filter="pending">待完成</button>
+          <button class="chip" data-filter="done">已完成</button>
+          <span class="drag-hint" id="dragHint">拖动任务可排序</span>
+        </div>
+
+        <ul class="task-list" id="taskList"></ul>
+        <div class="empty-state" id="planEmpty" hidden>
+          <div class="empty-emoji">🗒️</div>
+          <p class="empty-title">这一天还是空白的</p>
+          <p class="empty-sub">添加你的第一项任务，或先载入示例数据看看效果</p>
+          <div class="empty-actions">
+            <button class="primary-btn" id="emptyAddBtn" type="button">＋ 添加任务</button>
+            <button class="text-btn" id="emptySampleBtn" type="button">✨ 载入示例数据</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 周视图 -->
+      <section class="view" id="view-week">
+        <div class="view-head">
+          <h2>周视图</h2>
+          <button class="text-btn" id="weekJumpBtn" title="跳到本周今天">📍 本周</button>
+        </div>
+        <p class="week-hint">显示当前所选日期所在的一周，点击任意一天直达当日计划。</p>
+        <div class="week-grid" id="weekGrid"></div>
+      </section>
+
+      <!-- 月视图 -->
+      <section class="view" id="view-month">
+        <div class="view-head">
+          <h2>月视图</h2>
+          <div class="month-head-right">
+            <button class="text-btn" id="monthPrev">‹ 上月</button>
+            <span id="monthTitle" class="month-title"></span>
+            <button class="text-btn" id="monthNext">下月 ›</button>
+            <button class="text-btn" id="monthToday" title="跳到本月今天">📍 本月</button>
+          </div>
+        </div>
+        <p class="month-hint">显示所选日期所在月份，每天显示完成进度与评分；点击任意一天直达当日计划。</p>
+        <div class="month-grid" id="monthGrid"></div>
+      </section>
+
+      <!-- 笔记视图 -->
+      <section class="view" id="view-notes">
+        <div class="view-head">
+          <h2>笔记</h2>
+          <div class="note-head-tools">
+            <button class="text-btn" id="notePreviewBtn" title="预览 Markdown">👁 预览</button>
+            <span class="save-state" id="noteSaveState"></span>
+          </div>
+        </div>
+        <textarea id="noteArea" placeholder="在这里记录今天的学习笔记、心得、灵感……（自动保存，支持 Markdown）"></textarea>
+        <div class="note-preview" id="notePreview" hidden></div>
+        <div class="note-foot">
+          <span id="noteCount">0 字</span>
+          <div class="note-tools">
+            <button class="text-btn" id="noteClear">清空</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 统计视图 -->
+      <section class="view" id="view-stats">
+        <div class="view-head">
+          <h2>学习统计</h2>
+          <button class="text-btn" id="reviewBtn" title="汇总本周数据生成复盘报告">📋 生成本周复盘</button>
+        </div>
+        <div class="stat-cards" id="statCards"></div>
+        <div class="stat-block">
+          <h3>成就徽章</h3>
+          <div class="badges" id="badges"></div>
+        </div>
+        <div class="stat-block">
+          <h3>学习活跃度（近半年）</h3>
+          <div class="heatmap">
+            <div class="heat-grid" id="heatmap"></div>
+            <div class="heat-legend">少<span class="hm-cell hm-0"></span><span class="hm-cell hm-1"></span><span class="hm-cell hm-2"></span><span class="hm-cell hm-3"></span><span class="hm-cell hm-4"></span>多</div>
+          </div>
+        </div>
+        <div class="stat-block">
+          <h3>近 7 天完成率</h3>
+          <div class="bar-chart" id="weekChart"></div>
+        </div>
+        <div class="stat-block">
+          <h3>近 7 天专注时长（分钟）</h3>
+          <div class="bar-chart" id="focusChart"></div>
+        </div>
+        <div class="stat-block">
+          <h3>分类分布</h3>
+          <div class="cat-chart" id="catChart"></div>
+        </div>
+      </section>
+
+      <!-- 专注计时视图 -->
+      <section class="view" id="view-focus">
+        <div class="view-head"><h2>专注计时（番茄钟）</h2></div>
+        <div class="timer-wrap">
+          <svg class="timer-ring" viewBox="0 0 220 220">
+            <circle class="ring-bg" cx="110" cy="110" r="100"></circle>
+            <circle class="ring-fg" id="ringFg" cx="110" cy="110" r="100"></circle>
+          </svg>
+          <div class="timer-center">
+            <div class="timer-mode" id="timerMode">专注</div>
+            <div class="timer-time" id="timerTime">25:00</div>
+            <div class="timer-round" id="timerRound">第 1 轮</div>
+          </div>
+        </div>
+        <div class="timer-controls">
+          <button class="primary-btn" id="timerToggle">开始</button>
+          <button class="text-btn" id="timerReset">重置</button>
+        </div>
+        <div class="timer-settings">
+          <label>专注时长
+            <input type="number" id="focusMin" min="1" max="120" value="25" /> 分
+          </label>
+          <label>休息时长
+            <input type="number" id="breakMin" min="1" max="60" value="5" /> 分
+          </label>
+          <label class="sound-toggle"><input type="checkbox" id="soundOn" /> 完成提示音</label>
+        </div>
+        <p class="focus-tip">提示：开始专注后页面可最小化，专注/休息结束会弹系统通知（首次会请求授权）。</p>
+      </section>
+
+      <!-- 搜索视图 -->
+      <section class="view" id="view-search">
+        <div class="view-head"><h2>全局搜索</h2></div>
+        <input type="text" id="searchInput" class="search-input" placeholder="搜索任务标题、笔记内容……" />
+        <div class="search-results" id="searchResults"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 打印区域（导出 PDF 用） -->
+  <div id="printArea" class="print-area" hidden></div>
+
+  <!-- 分类管理弹窗 -->
+  <div class="modal-mask" id="catModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>管理分类</h3>
+        <button class="icon-btn" id="catClose" title="关闭">×</button>
+      </div>
+      <ul class="cat-list" id="catList"></ul>
+      <div class="cat-add">
+        <input type="text" id="catNewName" placeholder="新分类名称" maxlength="12" />
+        <input type="color" id="catNewColor" value="#3b6cf6" />
+        <button class="primary-btn" id="catAddBtn">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 习惯管理弹窗 -->
+  <div class="modal-mask" id="habitModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>习惯管理</h3>
+        <button class="icon-btn" id="habitClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">设置每日想坚持的习惯，在侧边栏一键打卡。</p>
+      <ul class="habit-edit-list" id="habitEditList"></ul>
+      <div class="cat-add">
+        <input type="text" id="habitNewName" placeholder="新习惯，如：背单词 20 个" maxlength="20" />
+        <button class="primary-btn" id="habitAddBtn">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 学习目标弹窗 -->
+  <div class="modal-mask" id="goalModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>学习目标</h3>
+        <button class="icon-btn" id="goalClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">设定可量化的长期目标（如「读完 10 本书」），在侧边栏用 ＋ 记录进度。</p>
+      <ul class="goal-edit-list" id="goalEditList"></ul>
+      <div class="goal-add">
+        <input type="text" id="goalNewName" placeholder="目标名称，如：读完 10 本专业书" maxlength="30" />
+        <div class="goal-add-row">
+          <input type="number" id="goalNewTarget" min="1" max="9999" placeholder="目标数" />
+          <input type="text" id="goalNewUnit" placeholder="单位(如 本/题)" maxlength="6" />
+          <input type="date" id="goalNewDeadline" title="截止日期(可选)" />
+          <button class="primary-btn" id="goalAddBtn">添加</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 周复盘弹窗 -->
+  <div class="modal-mask" id="reviewModal" hidden>
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <h3>本周复盘</h3>
+        <button class="icon-btn" id="reviewClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">已根据本周数据自动生成，可直接编辑「下周计划」等内容后复制或保存。</p>
+      <textarea id="reviewText" class="review-text" spellcheck="false"></textarea>
+      <div class="review-actions">
+        <button class="text-btn" id="reviewCopyBtn">📋 复制</button>
+        <button class="text-btn" id="reviewInsertBtn">📝 插入今日笔记</button>
+        <button class="primary-btn" id="reviewExportBtn">⬇ 导出 Markdown</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 计划模板弹窗 -->
+  <div class="modal-mask" id="tplModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>计划模板</h3>
+        <button class="icon-btn" id="tplClose" title="关闭">×</button>
+      </div>
+      <p class="modal-sub">把常用学习计划存成模板，日后一键载入到任意一天（自动去重）。</p>
+      <ul class="tpl-list" id="tplList"></ul>
+      <div class="cat-add">
+        <input type="text" id="tplName" placeholder="模板名称，如：工作日晨间流程" maxlength="20" />
+        <button class="primary-btn" id="tplAddBtn">保存当前计划</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 快捷键帮助弹窗 -->
+  <div class="modal-mask" id="helpModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>键盘快捷键</h3>
+        <button class="icon-btn" id="helpClose" title="关闭">×</button>
+      </div>
+      <ul class="help-list">
+        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd><span>切换 计划 / 周 / 月 / 笔记 / 统计 / 专注</span></li>
+        <li><kbd>N</kbd><span>新建任务</span></li>
+        <li><kbd>T</kbd><span>回到今天</span></li>
+        <li><kbd>C</kbd><span>复制今日计划到明天</span></li>
+        <li><kbd>W</kbd><span>打开周视图</span></li>
+        <li><kbd>M</kbd><span>打开月视图</span></li>
+        <li><kbd>/</kbd><span>打开全局搜索</span></li>
+        <li><kbd>?</kbd><span>打开本帮助</span></li>
+        <li><kbd>Esc</kbd><span>关闭弹窗 / 取消编辑</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 轻提示 -->
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
