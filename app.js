@@ -10,6 +10,8 @@ const BADGE_KEY = 'learnlog_badges_v1';
 const HABIT_KEY = 'learnlog_habits_v1';
 const GOAL_KEY = 'learnlog_goals_v1';
 const BACKUP_KEY = 'learnlog_autobackup_v1';
+const SESSION_KEY = 'learnlog_sessions_v1';
+const RECUR_KEY = 'learnlog_recurring_v1';
 const MAX_BACKUPS = 7;
 const CAT_PALETTE = ['#3b6cf6', '#2ea121', '#ff8800', '#a855f7', '#ec4899', '#14b8a6', '#f53f3f', '#64748b'];
 const ACCENT_PRESETS = ['#3b6cf6', '#7c4dff', '#e0408a', '#1aa179', '#f5871f', '#0ea5b7', '#e5484d', '#475569'];
@@ -41,7 +43,7 @@ function loadData() {
 }
 function saveData(data) { localStorage.setItem(DATA_KEY, JSON.stringify(data)); scheduleAutoSnapshot(); }
 function loadSettings() {
-  const def = { theme: 'light', accent: '#3b6cf6', categories: ['学习', '工作', '生活', '健身'], catColors: {}, focusMin: 25, breakMin: 5, dailyGoal: 0, weeklyGoal: 0, soundOn: true };
+  const def = { theme: 'light', accent: '#3b6cf6', categories: ['学习', '工作', '生活', '健身'], catColors: {}, focusMin: 25, breakMin: 5, dailyGoal: 0, weeklyGoal: 0, soundOn: true, onboarded: false };
   try { return { ...def, ...(JSON.parse(localStorage.getItem(SET_KEY)) || {}) }; }
   catch { return def; }
 }
@@ -85,6 +87,25 @@ function loadGoals() {
   catch { return []; }
 }
 function saveGoals(arr) { localStorage.setItem(GOAL_KEY, JSON.stringify(arr)); scheduleAutoSnapshot(); }
+function loadRecurring() {
+  try { return JSON.parse(localStorage.getItem(RECUR_KEY)) || []; }
+  catch { return []; }
+}
+function saveRecurring(arr) { localStorage.setItem(RECUR_KEY, JSON.stringify(arr)); scheduleAutoSnapshot(); }
+
+/* ---------- 专注记录（番茄日志） ---------- */
+function loadSessions() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY)) || []; }
+  catch { return []; }
+}
+function saveSessions(arr) { localStorage.setItem(SESSION_KEY, JSON.stringify(arr)); }
+// 每次专注块完成写入一条记录，最近 500 条上限，避免无限增长
+function recordFocusSession(duration, cat, taskId, title) {
+  const arr = loadSessions();
+  arr.push({ id: uid(), date: fmtDate(new Date()), ts: Date.now(), duration, cat, taskId: taskId || '', title: title || '' });
+  if (arr.length > 500) arr.splice(0, arr.length - 500);
+  saveSessions(arr);
+}
 
 /* ============================================================
    数据保险箱（浏览器内自动滚动备份，防 localStorage 误清）
@@ -139,6 +160,7 @@ function deleteSnapshot(ts) {
 }
 function reloadState() {
   state.settings = loadSettings();
+  state.recurring = loadRecurring();
   ensureCatColors();
   refreshCategorySelect();
   renderAll();
@@ -147,6 +169,12 @@ function reloadState() {
   renderStats();
   renderBackupList();
   if (typeof bindTimer === 'function') bindTimer();
+}
+function openOnboard() { $('#onboardModal').hidden = false; }
+function finishOnboarding() {
+  state.settings.onboarded = true;
+  saveSettings(state.settings);
+  $('#onboardModal').hidden = true;
 }
 function openBackupModal() {
   $('#backupModal').hidden = false;
@@ -192,6 +220,7 @@ function updateDay(dateStr, mutator) {
 const state = {
   currentDate: fmtDate(new Date()),
   settings: loadSettings(),
+  recurring: loadRecurring(),
   calMonth: new Date(),
   monthView: new Date(),
   taskFilter: 'all',
@@ -257,6 +286,7 @@ function init() {
   registerSW();
   startReminderChecker();
   scheduleAutoSnapshot();
+  if (!state.settings.onboarded) openOnboard();
 }
 
 function bindEvents() {
@@ -312,6 +342,11 @@ function bindEvents() {
     const btn = e.target.closest('button'); if (!btn) return;
     doExport(btn.dataset.export); $('#exportMenu').hidden = true;
   };
+  // 分享卡
+  $('#shareClose').onclick = () => $('#shareModal').hidden = true;
+  $('#shareCancel').onclick = () => $('#shareModal').hidden = true;
+  $('#shareModal').onclick = (e) => { if (e.target.id === 'shareModal') $('#shareModal').hidden = true; };
+  $('#shareDownload').onclick = downloadShareCard;
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.export-wrap')) { $('#exportMenu').hidden = true; $('#settingsMenu').hidden = true; }
   });
@@ -336,6 +371,7 @@ function bindEvents() {
     else if (act === 'import') $('#importFile').click();
     else if (act === 'sample') loadSample();
     else if (act === 'help') openHelp();
+    else if (act === 'onboard') openOnboard();
     else if (act === 'clear') clearAll();
   };
   $('#importFile').onchange = (e) => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ''; };
@@ -390,6 +426,9 @@ function bindEvents() {
   $('#backupClose').onclick = () => $('#backupModal').hidden = true;
   $('#backupModal').onclick = (e) => { if (e.target.id === 'backupModal') $('#backupModal').hidden = true; };
   $('#backupNowBtn').onclick = () => { saveSnapshot('manual'); renderBackupList(); toast('已立即备份'); };
+  $('#exportDataBtn').onclick = exportDataFile;
+  $('#importDataBtn').onclick = () => $('#importDataFile').click();
+  $('#importDataFile').onchange = (e) => { if (e.target.files && e.target.files[0]) importDataFile(e.target.files[0]); e.target.value = ''; };
 
   // 外观设置弹窗
   $('#appearanceClose').onclick = () => $('#appearanceModal').hidden = true;
@@ -411,9 +450,23 @@ function bindEvents() {
     renderMiniStats(); renderStats();
   };
 
+  // 统计页「回到今天」快捷入口：重置日期到今天并跳回计划视图
+  $('#statsTodayBtn').onclick = () => {
+    flushNote();
+    state.currentDate = fmtDate(new Date());
+    syncDateUI();
+    switchView('plan');
+    renderAll();
+    toast('已回到今天');
+  };
+
   // 帮助弹窗
   $('#helpClose').onclick = closeHelp;
   $('#helpModal').onclick = (e) => { if (e.target.id === 'helpModal') closeHelp(); };
+
+  // 首次引导弹窗
+  $('#onboardStart').onclick = finishOnboarding;
+  $('#onboardModal').onclick = (e) => { if (e.target.id === 'onboardModal') finishOnboarding(); };
 
   // 专注浮标
   $('#focusBadge').onclick = () => switchView('focus');
@@ -441,11 +494,14 @@ function bindHotkeys() {
       if (!$('#dayReviewModal').hidden) { $('#dayReviewModal').hidden = true; return; }
       if (!$('#backupModal').hidden) { $('#backupModal').hidden = true; return; }
       if (!$('#appearanceModal').hidden) { $('#appearanceModal').hidden = true; return; }
+      if (!$('#recurEditModal').hidden) { $('#recurEditModal').hidden = true; return; }
+      if (!$('#shareModal').hidden) { $('#shareModal').hidden = true; return; }
       if (document.body.classList.contains('immersive')) { toggleImmersive(); return; }
       if (!$('#helpModal').hidden) { closeHelp(); return; }
       if (!$('#exportMenu').hidden) { $('#exportMenu').hidden = true; return; }
       if (!$('#settingsMenu').hidden) { $('#settingsMenu').hidden = true; return; }
       if (state.editingId) { state.editingId = null; renderPlan(); return; }
+      if (!$('#onboardModal').hidden) { finishOnboarding(); return; }
     }
     const el = e.target;
     const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
@@ -520,7 +576,7 @@ function renderCalendar() {
    返回 { title, time, category, priority }，未命中的字段返回 null。 */
 function parseQuickInput(raw) {
   let text = ' ' + raw + ' ';
-  const res = { title: '', time: null, category: null, priority: null };
+  const res = { title: '', time: null, category: null, priority: null, repeat: null };
 
   // 优先级 !高/!中/!低 / !h !m !l / !high...
   const priMap = { '高': '高', '中': '中', '低': '低', 'h': '高', 'm': '中', 'l': '低', 'high': '高', 'mid': '中', 'low': '低' };
@@ -534,6 +590,14 @@ function parseQuickInput(raw) {
     const hit = state.settings.categories.find(c => c.toLowerCase() === name.toLowerCase());
     if (hit) { res.category = hit; return ' '; }
     return m; // 非已知分类，保留原文
+  });
+
+  // 重复标记 *每天 / *每日 / *daily / *周 / *每周 / *weekly（置 repeat 字段并移除 token）
+  // 注意：长匹配放前面（每周 先于 周），避免 *每周 被拆成 *周 + 残留「每」
+  const repeatMap = { '每天': 'daily', '每日': 'daily', 'daily': 'daily', '每周': 'weekly', '周': 'weekly', 'weekly': 'weekly' };
+  text = text.replace(/(^|\s)\*(每周|每日|每天|daily|weekly|周)(?=\s|$)/gi, (m, sp, r) => {
+    res.repeat = repeatMap[r.toLowerCase()] || null;
+    return ' ';
   });
 
   // 时间 HH:MM（开头或结尾）
@@ -572,6 +636,7 @@ function addTask() {
   const p = parseQuickInput(raw);
   const title = p.title || raw;
   if (!title) return;
+  if (p.repeat) { addRecurring(p); return; }
   const task = {
     id: uid(),
     time: p.time || $('#taskTime').value || '',
@@ -602,8 +667,157 @@ function deleteTask(id) {
   updateDay(state.currentDate, d => { d.tasks = d.tasks.filter(t => t.id !== id); });
   renderPlan(); renderMiniStats(); renderCalendar(); renderStats();
 }
-function reorderByDrop(srcId, targetId) {
-  if (srcId === targetId) return;
+/* ============================================================
+   重复任务（每天 / 每周自动出现，按日期记录完成）
+   ============================================================ */
+function addRecurring(p) {
+  const title = (p && p.title) || $('#taskTitle').value.trim();
+  if (!title) return;
+  const entry = {
+    id: uid(),
+    title,
+    cat: (p && p.category) || $('#taskCategory').value,
+    priority: (p && p.priority) || $('#taskPriority').value,
+    repeat: (p && p.repeat) || 'daily',
+    created: fmtDate(new Date()),
+    done: {},
+    paused: false,
+  };
+  state.recurring.push(entry);
+  saveRecurring(state.recurring);
+  $('#taskTitle').value = '';
+  $('#taskTime').value = '';
+  renderRecurring(); renderMiniStats(); renderCalendar(); renderStats();
+  toast('已添加重复任务（' + (entry.repeat === 'daily' ? '每天' : '每周') + '）：' + title);
+  setTimeout(() => $('#taskTitle').focus(), 0);
+}
+function toggleRecurring(id) {
+  const r = state.recurring.find(x => x.id === id);
+  if (!r) return;
+  const date = state.currentDate;
+  if (r.done[date]) delete r.done[date]; else r.done[date] = true;
+  saveRecurring(state.recurring);
+  renderRecurring(); renderMiniStats(); renderCalendar(); renderStats();
+  checkBadges();
+}
+function deleteRecurring(id) {
+  state.recurring = state.recurring.filter(x => x.id !== id);
+  saveRecurring(state.recurring);
+  renderRecurring(); renderMiniStats(); renderCalendar(); renderStats();
+}
+function renderRecurring() {
+  const box = $('#recurList');
+  if (!box) return;
+  const sec = $('#recurSection');
+  if (!state.recurring.length) { sec.hidden = true; box.innerHTML = ''; return; }
+  sec.hidden = false;
+  const date = state.currentDate;
+  const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
+  box.innerHTML = state.recurring.map(r => {
+    const done = !!r.done[date];
+    const paused = !!r.paused;
+    let extra = '';
+    if (done) {
+      const st = recurStreak(r);
+      extra = st.cur >= 2
+        ? `<span class="recur-streak" title="最长连续 ${st.best} 天">🔥 连续 ${st.cur} 天</span>`
+        : `<span class="recur-streak" title="累计 ${st.total} 次 · 最长 ${st.best} 天">✓ 已打卡 ${st.total} 次</span>`;
+    } else if (!paused) {
+      const pending = r.repeat === 'daily'
+        ? '⏳ 待打卡'
+        : (weekRange().some(d => r.done[d]) ? '' : '⏳ 本周待打卡');
+      if (pending) extra = `<span class="recur-pending">${pending}</span>`;
+    }
+    const pauseAct = paused ? 'resume' : 'pause';
+    const pauseIco = paused ? '▶' : '⏸';
+    const pauseTip = paused ? '恢复' : '暂停';
+    return `
+    <li class="task-item recur-item ${done ? 'done' : ''} ${paused ? 'paused' : ''}" data-id="${r.id}">
+      <div class="task-check" data-act="check">${done ? CHECK : ''}</div>
+      <span class="task-title">${escapeHtml(r.title)}</span>
+      <span class="task-cat" style="background:${catColor(r.cat)}">${escapeHtml(r.cat)}</span>
+      <span class="recur-badge ${r.repeat}">${r.repeat === 'daily' ? '🔁 每天' : '🔁 每周'}</span>
+      ${paused ? '<span class="recur-paused-badge">⏸ 已暂停</span>' : ''}
+      ${extra}
+      <button class="recur-ico" data-act="edit" title="编辑">✎</button>
+      <button class="recur-ico" data-act="${pauseAct}" title="${pauseTip}">${pauseIco}</button>
+      <button class="task-del" data-act="del" title="删除">×</button>
+    </li>`;
+  }).join('');
+  $$('.recur-item', box).forEach(li => {
+    const id = li.dataset.id;
+    li.querySelector('[data-act="check"]').onclick = () => toggleRecurring(id);
+    li.querySelector('[data-act="del"]').onclick = () => deleteRecurring(id);
+    li.querySelector('[data-act="edit"]').onclick = () => openRecurEdit(id);
+    const pe = li.querySelector('[data-act="pause"],[data-act="resume"]');
+    if (pe) pe.onclick = () => toggleRecurPause(id);
+  });
+}
+function openRecurEdit(id) {
+  const r = state.recurring.find(x => x.id === id);
+  if (!r) return;
+  const sel = $('#recurEditCat');
+  sel.innerHTML = state.settings.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  sel.value = state.settings.categories.includes(r.cat) ? r.cat : (state.settings.categories[0] || r.cat);
+  $('#recurEditTitle').value = r.title;
+  $('#recurEditRepeat').value = r.repeat;
+  $('#recurEditModal').dataset.id = id;
+  $('#recurEditModal').hidden = false;
+  $('#recurEditClose').onclick = () => $('#recurEditModal').hidden = true;
+  $('#recurEditCancel').onclick = () => $('#recurEditModal').hidden = true;
+  $('#recurEditModal').onclick = (e) => { if (e.target.id === 'recurEditModal') $('#recurEditModal').hidden = true; };
+  $('#recurEditSave').onclick = saveRecurEdit;
+  setTimeout(() => $('#recurEditTitle').focus(), 0);
+}
+function saveRecurEdit() {
+  const id = $('#recurEditModal').dataset.id;
+  const r = state.recurring.find(x => x.id === id);
+  if (!r) { $('#recurEditModal').hidden = true; return; }
+  const title = $('#recurEditTitle').value.trim();
+  if (!title) { toast('标题不能为空'); return; }
+  r.title = title;
+  r.cat = $('#recurEditCat').value;
+  r.repeat = $('#recurEditRepeat').value;
+  saveRecurring(state.recurring);
+  $('#recurEditModal').hidden = true;
+  renderRecurring(); renderMiniStats(); renderCalendar(); renderStats();
+  toast('已保存修改');
+}
+function toggleRecurPause(id) {
+  const r = state.recurring.find(x => x.id === id);
+  if (!r) return;
+  r.paused = !r.paused;
+  saveRecurring(state.recurring);
+  renderRecurring();
+  toast(r.paused ? '已暂停：' + r.title : '已恢复：' + r.title);
+}
+/* 重复任务连续打卡统计：返回 { cur, best, total }
+   cur = 截至今天/昨天的当前连续天数（昨天完成视为未断）；best = 历史最长连续；total = 累计打卡次数 */
+function recurStreak(r) {
+  const dates = Object.keys(r.done || {}).sort();
+  const total = dates.length;
+  if (!total) return { cur: 0, best: 0, total: 0 };
+  let best = 1, run = 1;
+  for (let i = 1; i < dates.length; i++) {
+    const gap = (parseDate(dates[i]) - parseDate(dates[i - 1])) / 86400000;
+    if (gap === 1) run++; else run = 1;
+    best = Math.max(best, run);
+  }
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  const yesterday = fmtDate(y);
+  const today = fmtDate(new Date());
+  const last = dates[dates.length - 1];
+  let cur = 0;
+  if (last === today || last === yesterday) {
+    cur = 1;
+    for (let i = dates.length - 1; i > 0; i--) {
+      const gap = (parseDate(dates[i]) - parseDate(dates[i - 1])) / 86400000;
+      if (gap === 1) cur++; else break;
+    }
+  }
+  return { cur, best, total };
+}
+function reorderByDrop(srcId, targetId) {  if (srcId === targetId) return;
   updateDay(state.currentDate, d => {
     const from = d.tasks.findIndex(t => t.id === srcId);
     if (from < 0) return;
@@ -631,7 +845,7 @@ function renderPlan() {
   list.sort((a, b) => ((a.order ?? 99) - (b.order ?? 99)) || (a.time || '99').localeCompare(b.time || '99'));
 
   const ul = $('#taskList');
-  $('#planEmpty').hidden = total !== 0;
+  $('#planEmpty').hidden = (total !== 0) || state.recurring.length > 0;
   ul.innerHTML = list.map(t => {
     if (t.id === state.editingId) {
       const opts = state.settings.categories.map(c => `<option value="${escapeHtml(c)}" ${c === t.category ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
@@ -691,6 +905,7 @@ function renderPlan() {
   });
   renderRating();
   renderFocusTaskSelect();
+  renderRecurring();
 }
 function saveTaskEdit(id, li) {
   const title = li.querySelector('.edit-title').value.trim();
@@ -773,17 +988,22 @@ function computeStats() {
   let totalTasks = 0, totalDone = 0, daysWithData = 0, daysWithDone = 0, focusTotal = 0;
   const catCount = {};
   const today = new Date();
+  // 重复任务完成日期集合：用于纳入连续打卡统计
+  const recurDoneDates = new Set();
+  let recurDoneTotal = 0;
+  state.recurring.forEach(r => { if (r.done) { Object.keys(r.done).forEach(d => recurDoneDates.add(d)); recurDoneTotal += Object.keys(r.done).length; } });
   let streak = 0;
   for (let i = 0; i < 365; i++) {
     const ds = fmtDate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i));
     const e = data[ds];
-    if (!e) { if (i === 0) continue; else break; }
-    const hasContent = e.tasks.length || (e.notes && e.notes.trim());
+    const recurringDone = recurDoneDates.has(ds);
+    if (!e && !recurringDone) { if (i === 0) continue; else break; }
+    const hasContent = (e && (e.tasks.length || (e.notes && e.notes.trim()))) || recurringDone;
     if (hasContent) daysWithData++;
-    const ddone = e.tasks.filter(t => t.done).length;
+    const ddone = (e ? e.tasks.filter(t => t.done).length : 0) + (recurringDone ? 1 : 0);
     if (ddone > 0) { daysWithDone++; streak++; } else if (i === 0) { /* 今天还没完成，不算断 */ } else break;
-    if (typeof e.focusMinutes === 'number') focusTotal += e.focusMinutes;
-    e.tasks.forEach(t => {
+    if (e && typeof e.focusMinutes === 'number') focusTotal += e.focusMinutes;
+    if (e) e.tasks.forEach(t => {
       totalTasks++; if (t.done) totalDone++;
       catCount[t.category] = (catCount[t.category] || 0) + 1;
     });
@@ -799,7 +1019,8 @@ function computeStats() {
     bestStreak = Math.max(bestStreak, run);
     prev = ds;
   }
-  return { totalTasks, totalDone, daysWithData, daysWithDone, catCount, streak, bestStreak, focusTotal };
+  const sessionCount = loadSessions().length;
+  return { totalTasks, totalDone, daysWithData, daysWithDone, catCount, streak, bestStreak, focusTotal, sessionCount, recurDoneTotal };
 }
 function weekFocusByCat(offsetWeeks) {
   const out = {};
@@ -834,6 +1055,9 @@ function renderStats() {
     <div class="stat-card"><div class="sc-val">${s.totalDone}/${s.totalTasks}</div><div class="sc-label">完成任务 / 总任务</div></div>
     <div class="stat-card"><div class="sc-val">🔥 ${s.streak}</div><div class="sc-label">连续打卡（最佳 ${s.bestStreak}）</div></div>
     <div class="stat-card"><div class="sc-val">⏱ ${todayFocus}</div><div class="sc-label">今日专注（分钟）</div></div>
+    <div class="stat-card"><div class="sc-val">${(s.focusTotal / 60).toFixed(1)}h</div><div class="sc-label">累计专注时长</div></div>
+    <div class="stat-card"><div class="sc-val">${s.sessionCount}</div><div class="sc-label">专注记录数 🍅</div></div>
+    <div class="stat-card"><div class="sc-val">📆 ${s.recurDoneTotal}</div><div class="sc-label">重复任务打卡（次）</div></div>
     <div class="stat-card"><div class="sc-val">${avgRating}</div><div class="sc-label">平均每日评分</div></div>
     <div class="stat-card"><div class="sc-val">${wGoal ? wDone + '/' + wGoal : '—'}</div><div class="sc-label">本周目标完成${wGoal ? '（' + wRate + '%）' : '（未设置）'}</div></div>`;
 
@@ -918,6 +1142,27 @@ function renderStats() {
       <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${cnt / max * 100}%;background:${catColor(name)}"></div></div>
       <span class="cat-count">${cnt}</span>
     </div>`).join('') : '<p class="empty-hint">暂无数据</p>';
+
+  // 近期专注记录（番茄日志）
+  const sessions = loadSessions().slice().sort((a, b) => b.ts - a.ts).slice(0, 12);
+  const fl = $('#focusLog');
+  if (fl) {
+    if (!sessions.length) {
+      fl.innerHTML = '<p class="empty-hint">还没有专注记录，去番茄钟专注一轮，这里会留下你的足迹 🍅</p>';
+    } else {
+      fl.innerHTML = sessions.map(s2 => {
+        const c = s2.cat === '未分类' ? 'var(--text-soft)' : catColor(s2.cat);
+        const t = s2.title ? '· ' + escapeHtml(s2.title) : '';
+        return `<div class="fl-row">
+          <span class="cat-dot" style="background:${c}"></span>
+          <span class="fl-cat">${escapeHtml(s2.cat)}</span>
+          <span class="fl-dur">${s2.duration} 分</span>
+          <span class="fl-title">${t}</span>
+          <span class="fl-date">${s2.date.slice(5)}</span>
+        </div>`;
+      }).join('');
+    }
+  }
 
   // 活跃度热力图
   renderHeatmap();
@@ -1229,6 +1474,8 @@ function tick() {
           if (t) { t.focusMin = (t.focusMin || 0) + mins; linkedTitle = t.title; }
         }
       });
+      // 记录一条专注 session（番茄日志）
+      recordFocusSession(mins, focusCat, focusTask ? focusTask.id : '', linkedTitle);
       // 关联「专注型」目标：番茄钟专注自动累计进度
       const goals = loadGoals();
       const lkGoals = goals.filter(g => g.type === 'focus' && (g.linkCat || '') === focusCat);
@@ -1306,6 +1553,7 @@ function doExport(type) {
   else if (type === 'pdf') exportPdf(day);
   else if (type === 'week') exportRangeMarkdown(weekRange(), '本周');
   else if (type === 'month') exportRangeMarkdown(monthRange(), '本月');
+  else if (type === 'card') openShareCard();
 }
 function weekRange() {
   const d = parseDate(state.currentDate);
@@ -1339,6 +1587,132 @@ function exportRangeMarkdown(dates, label) {
   if (!any) lines.push('_（该区间暂无记录）_');
   download(`${label}-${dates[0]}.md`, lines.join('\n'), 'text/markdown');
   toast('已导出' + label);
+}
+/* ============================================================
+   分享卡（把当日战绩渲染成可下载的图片）
+   ============================================================ */
+function buildShareCard(date) {
+  const d = getDay(date);
+  const tasks = (d.tasks || []).map(t => ({ title: t.title, done: !!t.done, cat: t.category, time: t.time || '' }));
+  const done = tasks.filter(t => t.done).length;
+  const focusMin = typeof d.focusMinutes === 'number' ? d.focusMinutes : 0;
+  const rating = d.rating || 0;
+  const st = computeStats();
+  return {
+    date, weekday: weekdayCN(date),
+    tasks, done, total: tasks.length,
+    focusMin, rating,
+    streak: st.streak,
+    accent: state.settings.accent || '#3b6cf6',
+  };
+}
+function renderShareCard() {
+  const c = buildShareCard(state.currentDate);
+  const prev = $('#sharePreview');
+  const taskHtml = c.tasks.slice(0, 12).map(t => `
+    <div class="sc-task ${t.done ? 'done' : ''}">
+      <span class="sc-check">${t.done ? '✓' : ''}</span>
+      <span class="sc-dot" style="background:${catColor(t.cat)}"></span>
+      <span class="sc-title">${escapeHtml(t.title)}</span>
+      <span class="sc-cat">${escapeHtml(t.cat)}</span>
+    </div>`).join('') || '<div class="sc-empty">今天还没有任务，去计划页添加吧～</div>';
+  prev.innerHTML = `
+  <div class="share-card" style="--sc-accent:${c.accent}">
+    <div class="sc-top">
+      <span class="sc-logo">📚 LearnLog</span>
+      <span class="sc-date">${c.date} · ${c.weekday}</span>
+    </div>
+    <div class="sc-stats">
+      <div class="sc-stat"><b>${c.done}/${c.total}</b><span>完成</span></div>
+      <div class="sc-stat"><b>🔥 ${c.streak}</b><span>连续天</span></div>
+      <div class="sc-stat"><b>⏱ ${c.focusMin}</b><span>专注分</span></div>
+      <div class="sc-stat"><b>${c.rating ? c.rating + '★' : '—'}</b><span>评分</span></div>
+    </div>
+    <div class="sc-list">${taskHtml}</div>
+    <div class="sc-foot">学而时习之 · 用 LearnLog 记录每一天</div>
+  </div>`;
+}
+function openShareCard() { renderShareCard(); $('#shareModal').hidden = false; }
+function scShade(hex, amt) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(x => x + x).join('') : h, 16);
+  let r = (n >> 16) + amt, g = ((n >> 8) & 255) + amt, b = (n & 255) + amt;
+  r = Math.max(0, Math.min(255, r)); g = Math.max(0, Math.min(255, g)); b = Math.max(0, Math.min(255, b));
+  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+function downloadShareCard() {
+  const c = buildShareCard(state.currentDate);
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext && cv.getContext('2d');
+  if (!ctx) { toast('当前环境不支持导出图片'); return; }
+  const W = 1080, H = 1350, PAD = 64;
+  cv.width = W; cv.height = H;
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, c.accent); bg.addColorStop(1, scShade(c.accent, -28));
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // 白色面板
+  const rx = PAD, ry = PAD, rw = W - PAD * 2, rh = H - PAD * 2, rr = 36;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(rx, ry, rw, rh, rr); else ctx.rect(rx, ry, rw, rh);
+  ctx.fill();
+  const M = rx + 56;
+  let y = ry + 80;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = c.accent;
+  ctx.font = '700 40px system-ui, sans-serif';
+  ctx.fillText('📚 LearnLog', M, y);
+  ctx.fillStyle = '#9aa0ad';
+  ctx.font = '500 30px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(c.date + ' · ' + c.weekday, rx + rw - 56, y);
+  ctx.textAlign = 'left';
+  y += 56;
+  ctx.strokeStyle = '#eef0f4'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(M, y); ctx.lineTo(rx + rw - 56, y); ctx.stroke();
+  // 统计
+  y += 90;
+  const stats = [['完成', c.done + '/' + c.total], ['连续天', '🔥 ' + c.streak], ['专注分', '⏱ ' + c.focusMin], ['评分', c.rating ? c.rating + '★' : '—']];
+  const sw = (rw - 112) / 4;
+  stats.forEach((s, i) => {
+    const sx = M + i * sw;
+    ctx.fillStyle = c.accent; ctx.font = '700 46px system-ui, sans-serif';
+    ctx.fillText(s[1], sx, y + 10);
+    ctx.fillStyle = '#9aa0ad'; ctx.font = '500 26px system-ui, sans-serif';
+    ctx.fillText(s[0], sx, y + 50);
+  });
+  y += 110;
+  ctx.strokeStyle = '#eef0f4'; ctx.beginPath(); ctx.moveTo(M, y); ctx.lineTo(rx + rw - 56, y); ctx.stroke();
+  // 任务列表
+  y += 70;
+  ctx.font = '500 30px system-ui, sans-serif';
+  c.tasks.slice(0, 12).forEach(t => {
+    ctx.fillStyle = t.done ? c.accent : '#cfd3da';
+    ctx.fillText(t.done ? '✓' : '○', M, y);
+    ctx.fillStyle = t.done ? '#2b2f36' : '#9aa0ad';
+    const label = (t.time ? t.time + ' ' : '') + t.title;
+    ctx.fillText(label.length > 26 ? label.slice(0, 26) + '…' : label, M + 50, y);
+    ctx.fillStyle = catColor(t.cat); ctx.font = '600 22px system-ui, sans-serif';
+    const catw = ctx.measureText(t.cat).width;
+    ctx.fillText(t.cat, rx + rw - 56 - catw, y);
+    ctx.font = '500 30px system-ui, sans-serif';
+    y += 58;
+  });
+  if (!c.tasks.length) {
+    ctx.fillStyle = '#9aa0ad'; ctx.fillText('今天还没有任务，去计划页添加吧～', M, y);
+  }
+  // 页脚
+  ctx.fillStyle = '#b6bcc6'; ctx.font = '500 24px system-ui, sans-serif';
+  ctx.fillText('学而时习之 · 用 LearnLog 记录每一天', M, ry + rh - 48);
+  cv.toBlob((blob) => {
+    if (!blob) { toast('生成图片失败'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `LearnLog-${c.date}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('已下载分享卡');
+  });
 }
 function exportMarkdown(day) {
   const lines = [];
@@ -1395,6 +1769,60 @@ function download(filename, content, mime) {
   const a = document.createElement('a');
   a.href = url; a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+/* ============================================================
+   数据文件备份（导出 / 导入 .json）
+   ============================================================ */
+function serializeAll() {
+  return {
+    app: 'LearnLog', version: 1,
+    exportedAt: new Date().toISOString(),
+    data: loadData(),
+    settings: loadSettings(),
+    templates: loadTemplates(),
+    badges: loadBadges(),
+    habits: loadHabits(),
+    goals: loadGoals(),
+    sessions: loadSessions(),
+    recurring: loadRecurring(),
+    backups: loadBackups(),
+  };
+}
+function exportDataFile() {
+  const pkg = serializeAll();
+  const d = new Date();
+  const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+  download('LearnLog-数据备份-' + stamp + '.json', JSON.stringify(pkg, null, 2), 'application/json');
+  toast('已导出数据备份文件');
+}
+function importDataObject(obj) {
+  if (!obj || typeof obj !== 'object') { toast('文件格式不正确'); return false; }
+  const safe = (v, d) => (v && typeof v === 'object' ? v : d);
+  saveData(safe(obj.data, {}));
+  saveSettings(safe(obj.settings, loadSettings()));
+  saveTemplates(safe(obj.templates, []));
+  saveBadges(safe(obj.badges, {}));
+  saveHabits(safe(obj.habits, []));
+  saveGoals(safe(obj.goals, []));
+  saveSessions(safe(obj.sessions, []));
+  saveRecurring(safe(obj.recurring, []));
+  saveBackups(safe(obj.backups, []));
+  reloadState();
+  renderRecurring();
+  return true;
+}
+function importDataFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const obj = JSON.parse(String(reader.result));
+      const ok = importDataObject(obj);
+      if (ok) { toast('已从文件恢复数据'); if (!$('#backupModal').hidden) renderBackupList(); }
+    } catch (e) { toast('解析失败：不是有效的备份文件'); }
+  };
+  reader.onerror = () => toast('读取文件失败');
+  reader.readAsText(file);
 }
 
 /* ============================================================

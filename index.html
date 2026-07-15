@@ -36,6 +36,7 @@
           <button data-export="pdf">导出 PDF（打印）</button>
           <button data-export="week">导出本周（Markdown）</button>
           <button data-export="month">导出本月（Markdown）</button>
+          <button data-export="card">📤 生成分享卡（图片）</button>
         </div>
       </div>
       <div class="export-wrap">
@@ -51,6 +52,7 @@
           <button data-act="import">📥 导入数据</button>
           <button data-act="sample">✨ 生成示例数据</button>
           <button data-act="help">⌨ 快捷键</button>
+          <button data-act="onboard">👋 重新查看引导</button>
           <button data-act="clear" class="danger">🗑 清空全部数据</button>
         </div>
       </div>
@@ -136,7 +138,7 @@
           </select>
           <button type="submit" class="primary-btn">添加</button>
         </form>
-        <p class="quick-hint">💡 快速输入：在标题里直接写 <code>09:30 背单词 #学习 !高</code>，自动识别时间 / 分类 / 优先级</p>
+        <p class="quick-hint">💡 快速输入：写 <code>09:30 背单词 #学习 !高</code> 自动识别时间/分类/优先级；加 <code>*每天</code> / <code>*每周</code> 创建重复任务</p>
 
         <div class="filter-tabs" id="taskFilter">
           <button class="chip active" data-filter="all">全部</button>
@@ -146,14 +148,22 @@
         </div>
 
         <ul class="task-list" id="taskList"></ul>
+        <div class="recur-section" id="recurSection" hidden>
+          <div class="recur-head">
+            <span>🔁 重复任务</span>
+            <span class="recur-hint">在上方输入框加 <code>*每天</code> / <code>*每周</code> 即可创建</span>
+          </div>
+          <ul class="task-list recur-list" id="recurList"></ul>
+        </div>
         <div class="empty-state" id="planEmpty" hidden>
           <div class="empty-emoji">🗒️</div>
           <p class="empty-title">这一天还是空白的</p>
           <p class="empty-sub">添加你的第一项任务，或先载入示例数据看看效果</p>
           <div class="empty-actions">
-            <button class="primary-btn" id="emptyAddBtn" type="button">＋ 添加任务</button>
+            <button class="primary-btn empty-cta" id="emptyAddBtn" type="button">＋ 添加任务</button>
             <button class="text-btn" id="emptySampleBtn" type="button">✨ 载入示例数据</button>
           </div>
+          <p class="empty-tip">💡 试试在上方写 <code>09:30 背单词 #学习 !高</code>，自动识别时间 / 分类 / 优先级</p>
         </div>
       </section>
 
@@ -209,6 +219,7 @@
             <span>本周目标</span>🎯<input type="number" id="weeklyGoalInput" min="0" max="200" placeholder="任务数" />
           </div>
           <button class="text-btn" id="reviewBtn" title="汇总本周数据生成复盘报告">📋 生成本周复盘</button>
+          <button class="text-btn" id="statsTodayBtn" title="跳回今天的计划，继续记录">📍 回到今天</button>
         </div>
         <div class="stat-cards" id="statCards"></div>
         <div class="stat-block">
@@ -242,6 +253,10 @@
         <div class="stat-block">
           <h3>分类分布</h3>
           <div class="cat-chart" id="catChart"></div>
+        </div>
+        <div class="stat-block">
+          <h3>🍅 近期专注记录</h3>
+          <div class="focus-log" id="focusLog"></div>
         </div>
       </section>
 
@@ -354,6 +369,46 @@
     </div>
   </div>
 
+  <!-- 重复任务编辑弹窗 -->
+  <div class="modal-mask" id="recurEditModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>编辑重复任务</h3>
+        <button class="icon-btn" id="recurEditClose" title="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label">标题</label>
+        <input type="text" id="recurEditTitle" maxlength="60" placeholder="任务标题" />
+        <label class="field-label">分类</label>
+        <select id="recurEditCat"></select>
+        <label class="field-label">重复频率</label>
+        <select id="recurEditRepeat">
+          <option value="daily">每天</option>
+          <option value="weekly">每周</option>
+        </select>
+      </div>
+      <div class="modal-foot">
+        <button class="text-btn" id="recurEditCancel" type="button">取消</button>
+        <button class="primary-btn" id="recurEditSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 分享卡弹窗 -->
+  <div class="modal-mask" id="shareModal" hidden>
+    <div class="modal share-modal">
+      <div class="modal-head">
+        <h3>分享卡</h3>
+        <button class="icon-btn" id="shareClose" title="关闭">×</button>
+      </div>
+      <div class="share-preview" id="sharePreview"></div>
+      <div class="modal-foot">
+        <button class="text-btn" id="shareCancel" type="button">取消</button>
+        <button class="primary-btn" id="shareDownload" type="button">⬇ 下载图片</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 周复盘弹窗 -->
   <div class="modal-mask" id="reviewModal" hidden>
     <div class="modal modal-lg">
@@ -409,6 +464,15 @@
       </div>
       <p class="modal-sub">修改数据后约 4 秒会自动生成当天备份（浏览器内保留最近 7 份），防止误清缓存丢数据。也可随时「立即备份」。</p>
       <button class="primary-btn" id="backupNowBtn" style="margin-bottom:14px">＋ 立即备份当前数据</button>
+      <div class="backup-file">
+        <div class="backup-file-title">文件备份（导出 / 导入）</div>
+        <p class="modal-sub" style="margin:2px 0 10px">把全部数据导出成单个 .json 文件，换浏览器或清缓存后可随时从文件恢复。</p>
+        <div class="backup-file-actions">
+          <button class="text-btn" id="exportDataBtn">⬇ 导出全部数据 (.json)</button>
+          <button class="text-btn" id="importDataBtn">⬆ 从文件恢复</button>
+          <input type="file" id="importDataFile" accept="application/json,.json" hidden />
+        </div>
+      </div>
       <ul class="goal-edit-list" id="backupList"></ul>
     </div>
   </div>
@@ -446,6 +510,24 @@
         <input type="text" id="tplName" placeholder="模板名称，如：工作日晨间流程" maxlength="20" />
         <button class="primary-btn" id="tplAddBtn">保存当前计划</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 首次引导弹窗 -->
+  <div class="modal-mask" id="onboardModal" hidden>
+    <div class="modal onboard-modal">
+      <div class="onboard-hero">
+        <div class="onboard-emoji">📚</div>
+        <h3>欢迎使用 LearnLog</h3>
+        <p>一个纯前端的学习记录平台，帮你把每天的计划、专注与坚持都留住。</p>
+      </div>
+      <ul class="onboard-list">
+        <li><span class="onb-ico">🗓</span><div><b>做计划</b><span>每天添加任务，智能输入 <code>*每天</code> 还能变重复任务</span></div></li>
+        <li><span class="onb-ico">⏱</span><div><b>专注</b><span>用番茄钟计时，记录每一次专注足迹</span></div></li>
+        <li><span class="onb-ico">🔥</span><div><b>坚持</b><span>习惯打卡 + 重复任务连续天数，看得见的进步</span></div></li>
+        <li><span class="onb-ico">📊</span><div><b>回顾</b><span>统计页看趋势，分享卡一键晒出今日战绩</span></div></li>
+      </ul>
+      <button class="primary-btn onboard-start" id="onboardStart">开始使用 →</button>
     </div>
   </div>
 

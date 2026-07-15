@@ -18,6 +18,8 @@ window.print = () => {};
 window.confirm = () => true;
 window.URL.createObjectURL = window.URL.createObjectURL || (() => 'blob:test');
 window.URL.revokeObjectURL = window.URL.revokeObjectURL || (() => {});
+// 无 canvas 环境：桩掉 getContext 让下载逻辑安全降级（不触发 jsdomError）
+if (window.HTMLCanvasElement) window.HTMLCanvasElement.prototype.getContext = () => null;
 
 const errors = [];
 window.addEventListener('error', e => errors.push(String(e.error || e.message)));
@@ -42,6 +44,7 @@ setTimeout(() => {
     // 1. 初始渲染
     assert($('#planDateTitle') && $('#planDateTitle').textContent.includes('计划'), '初始计划视图已渲染');
     assert($('#calGrid').children.length > 0, '日历已渲染');
+    assert($('#onboardModal').hidden === false, '首次加载自动弹出引导弹窗（init）');
 
     // 2. 载入示例数据
     window.loadSample();
@@ -543,6 +546,193 @@ setTimeout(() => {
     assert($('#immersiveExit').hidden === false, '沉浸模式显示退出按钮');
     doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
     assert(!doc.body.classList.contains('immersive'), 'Esc 退出沉浸模式');
+
+    // 59-69. 收尾打磨：空状态引导动画 / 移动端专注适配 / 统计页「回到今天」
+    // 空状态：无任务日期应显示引导，主按钮带 empty-cta 引导类，点击聚焦输入框
+    const rt = window.fmtDate(new Date());
+    $('#datePicker').value = '2033-05-05';
+    $('#datePicker').dispatchEvent(new window.Event('change', { bubbles: true }));
+    window.switchView('plan');
+    assert($('#planEmpty').hidden === false, '空日期显示首屏引导');
+    assert($('#emptyAddBtn').classList.contains('empty-cta'), '引导主按钮带 empty-cta 脉冲类');
+    assert($('#planEmpty').textContent.includes('09:30'), '引导含智能输入示例提示');
+    $('#emptyAddBtn').click();
+    assert(doc.activeElement === $('#taskTitle'), '点击空状态主按钮聚焦任务输入框');
+    // 添加任务后空状态应隐藏
+    $('#taskTitle').value = '让空状态消失的任务';
+    $('#taskForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true }));
+    assert($('#planEmpty').hidden === true, '有任务后空状态隐藏');
+
+    // 回到今天：从历史日期点「回到今天」应重置为今天并跳到计划视图
+    $('#datePicker').value = '2031-01-01';
+    $('#datePicker').dispatchEvent(new window.Event('change', { bubbles: true }));
+    window.switchView('stats');
+    assert($('#statsTodayBtn') !== null, '统计页存在「回到今天」按钮');
+    $('#statsTodayBtn').click();
+    assert($('#datePicker').value === rt, '「回到今天」重置日期为今天（实际 ' + $('#datePicker').value + '）');
+    assert($('#view-plan').classList.contains('active'), '「回到今天」跳回计划视图');
+
+    // 移动端专注适配：结构完整 + 沉浸退出按钮可触达
+    window.switchView('focus');
+    assert($('#view-focus .timer-wrap') !== null, '专注视图含计时器容器');
+    assert($('#focusTaskSel') !== null && $('#immersiveBtn') !== null, '专注视图含关联任务与沉浸入口');
+    $('#immersiveBtn').click();
+    assert($('#immersiveExit').hidden === false, '沉浸模式退出按钮可见');
+    $('#immersiveExit').click();
+    assert(!doc.body.classList.contains('immersive'), '点退出按钮离开沉浸模式');
+
+    // 70-74. 专注记录（番茄日志）：完成专注块写入 session 并在统计页渲染
+    const sjToday = window.fmtDate(new Date());
+    $('#datePicker').value = sjToday;
+    $('#datePicker').dispatchEvent(new window.Event('change', { bubbles: true }));
+    const sessBefore = window.loadSessions().length;
+    // 专注/休息都设为 1 分钟，跑满一轮；无论当前处于专注还是休息态，必至少完成一个专注块
+    $('#focusMin').value = '1';
+    $('#focusMin').dispatchEvent(new window.Event('change', { bubbles: true }));
+    $('#breakMin').value = '1';
+    $('#breakMin').dispatchEvent(new window.Event('change', { bubbles: true }));
+    window.resetTimer();
+    for (let i = 0; i < 120; i++) window.tick();
+    const allSess = window.loadSessions();
+    assert(allSess.length === sessBefore + 1, '完成一个专注块写入一条 session（' + sessBefore + '→' + allSess.length + '）');
+    const lastS = allSess[allSess.length - 1];
+    assert(lastS.duration === 1 && lastS.cat && typeof lastS.date === 'string', 'session 含时长/分类/日期字段');
+    window.switchView('stats');
+    assert($('#focusLog') !== null, '统计页存在专注记录容器 #focusLog');
+    assert($('#focusLog').textContent.includes('分'), '专注记录块渲染时长');
+    assert($('#statCards').innerHTML.includes('累计专注时长'), '统计卡片含累计专注时长');
+
+    // 75-86. 重复任务（每天 / 每周）：解析、创建、勾选、删除、统计联动
+    assert(window.parseQuickInput('背单词 *每天').repeat === 'daily', 'parseQuickInput 识别 *每天 → daily');
+    assert(window.parseQuickInput('周复习 *每周').repeat === 'weekly', 'parseQuickInput 识别 *每周 → weekly');
+    assert(window.parseQuickInput('练琴 *周').repeat === 'weekly', 'parseQuickInput 识别 *周 → weekly');
+    assert(window.parseQuickInput('背单词 *每天').title === '背单词', '*每天 被从标题移除');
+    assert(window.parseQuickInput('周复习 *每周').title === '周复习', '*每周 被完整移除（无残留字）');
+
+    const tasksBefore = $('#taskList').children.length;
+    window.addRecurring({ title: '晨读', cat: '学习', repeat: 'daily' });
+    assert($('#recurList').children.length === 1, 'addRecurring 渲染 1 条重复任务');
+    assert($('#recurSection').hidden === false, '有重复任务时区块可见');
+    assert(window.loadRecurring().length === 1, '重复任务已持久化到 localStorage');
+
+    // 通过快速输入提交 *每周 创建第二条，且不写入当日任务列表
+    $('#taskTitle').value = '周复习 #工作 *每周';
+    $('#taskForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true }));
+    assert($('#recurList').children.length === 2, '快速输入 *每周 再创建 1 条（共 2）');
+    assert($('#taskList').children.length === tasksBefore, '重复任务不污染当日任务列表');
+    assert($('#recurList').children[1].querySelector('.recur-badge').textContent.includes('每周'), '第二条显示为「每周」徽标');
+
+    // 勾选第一条（每天）：标记今日完成并联动连续打卡
+    $('#recurList').children[0].querySelector('[data-act="check"]').click();
+    assert($('#recurList').children[0].classList.contains('done'), '勾选后该重复项标记为已完成');
+    assert(window.computeStats().streak >= 1, '重复任务完成计入连续打卡（streak≥1）');
+
+    // 删除两条：列表清空且区块隐藏
+    $('#recurList').children[0].querySelector('[data-act="del"]').click();
+    assert($('#recurList').children.length === 1, '删除一条后剩 1 条');
+    $('#recurList').children[0].querySelector('[data-act="del"]').click();
+    assert($('#recurList').children.length === 0, '删除全部后列表为空');
+    assert($('#recurSection').hidden === true, '无重复任务时区块隐藏');
+
+    // 87-98. 重复任务连续打卡 streak + 待打卡提醒 + 统计联动
+    window.addRecurring({ title: '晨读', cat: '学习', repeat: 'daily' });
+    $('#recurList').children[0].querySelector('[data-act="check"]').click();
+    assert($('#recurList').children[0].querySelector('.recur-streak') !== null, '已完成项显示连续打卡徽标');
+    assert($('#recurList').children[0].querySelector('.recur-streak').textContent.includes('已打卡 1 次'), '今日首次打卡显示「已打卡 1 次」');
+    assert(window.computeStats().recurDoneTotal === 1, '重复任务累计打卡计入统计（recurDoneTotal=1）');
+    window.switchView('stats');
+    assert($('#statCards').innerHTML.includes('重复任务打卡'), '统计卡含「重复任务打卡」');
+
+    // recurStreak 纯函数多场景（今天 = 2026-07-15）
+    const stA = window.recurStreak({ done: { '2026-07-13': true, '2026-07-14': true, '2026-07-15': true } });
+    assert(stA.cur === 3 && stA.best === 3 && stA.total === 3, '连续 3 天（含今天）→ cur/best/total=3');
+    const stB = window.recurStreak({ done: { '2026-07-10': true, '2026-07-11': true, '2026-07-15': true } });
+    assert(stB.cur === 1 && stB.best === 2 && stB.total === 3, '今天打卡但中间断 → cur=1,best=2');
+    const stC = window.recurStreak({ done: { '2026-07-14': true } });
+    assert(stC.cur === 1 && stC.best === 1, '仅昨天打卡（今天未打卡）→ cur=1（未断）');
+    const stD = window.recurStreak({ done: { '2026-07-10': true } });
+    assert(stD.cur === 0 && stD.best === 1, '很久前打卡 → cur=0,best=1');
+
+    // 待打卡提醒：未完成的每天/每周任务显示提醒
+    window.switchView('plan');
+    window.addRecurring({ title: '夜跑', cat: '健身', repeat: 'daily' });
+    window.addRecurring({ title: '周复盘', cat: '工作', repeat: 'weekly' });
+    const rows = [...$('#recurList').children];
+    const dailyPending = rows.find(li => li.textContent.includes('夜跑'));
+    const weeklyPending = rows.find(li => li.textContent.includes('周复盘'));
+    assert(dailyPending && dailyPending.querySelector('.recur-pending') && dailyPending.textContent.includes('待打卡'), '未完成的每天任务显示「待打卡」');
+    assert(weeklyPending && weeklyPending.querySelector('.recur-pending') && weeklyPending.textContent.includes('本周待打卡'), '本周未完成的每周任务显示「本周待打卡」');
+
+    // 99-108. 重复任务编辑 + 暂停/恢复 + Esc 关闭编辑弹窗
+    window.switchView('plan');
+    const editRow = [...$('#recurList').children].find(li => li.textContent.includes('夜跑'));
+    editRow.querySelector('[data-act="edit"]').click();
+    assert($('#recurEditModal').hidden === false, '点击编辑打开编辑弹窗');
+    $('#recurEditTitle').value = '夜跑5公里';
+    $('#recurEditRepeat').value = 'weekly';
+    $('#recurEditSave').click();
+    assert($('#recurEditModal').hidden === true, '保存后编辑弹窗关闭');
+    const edited = [...$('#recurList').children].find(li => li.textContent.includes('夜跑5公里'));
+    assert(edited !== undefined, '编辑标题生效');
+    assert(edited.textContent.includes('🔁 每周'), '编辑频率改为每周生效');
+
+    const pauseRow = [...$('#recurList').children].find(li => li.textContent.includes('夜跑5公里'));
+    pauseRow.querySelector('[data-act="pause"]').click();
+    const pausedRow = [...$('#recurList').children].find(li => li.textContent.includes('夜跑5公里'));
+    assert(pausedRow.classList.contains('paused'), '暂停后行含 paused 类');
+    assert(pausedRow.querySelector('.recur-paused-badge') !== null, '暂停后显示「已暂停」徽标');
+    assert(pausedRow.querySelector('.recur-pending') === null, '暂停任务不再显示待打卡提醒');
+
+    pausedRow.querySelector('[data-act="resume"]').click();
+    const resumedRow = [...$('#recurList').children].find(li => li.textContent.includes('夜跑5公里'));
+    assert(!resumedRow.classList.contains('paused'), '恢复后移除 paused 类');
+    assert(resumedRow.querySelector('.recur-paused-badge') === null, '恢复后移除「已暂停」徽标');
+
+    [...$('#recurList').children].find(li => li.textContent.includes('晨读')).querySelector('[data-act="edit"]').click();
+    assert($('#recurEditModal').hidden === false, '再次打开编辑弹窗');
+    doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert($('#recurEditModal').hidden === true, 'Esc 关闭编辑弹窗');
+
+    // 109-117. 分享卡：数据模型 + 渲染 + 安全下载 + Esc 关闭
+    const todayStr = window.fmtDate(new Date());
+    const sc = window.buildShareCard(todayStr);
+    assert(sc && typeof sc === 'object' && Array.isArray(sc.tasks) && 'done' in sc && 'streak' in sc && 'accent' in sc, 'buildShareCard 返回含 tasks/done/streak/accent 的数据模型');
+    window.openShareCard();
+    assert($('#shareModal').hidden === false, 'openShareCard 打开分享卡弹窗');
+    assert($('#sharePreview').querySelector('.share-card') !== null, '分享卡预览渲染 .share-card');
+    assert($('#sharePreview').textContent.includes(todayStr), '分享卡预览含当前日期');
+    let dlErr = null;
+    try { window.downloadShareCard(); } catch (e) { dlErr = e; }
+    assert(dlErr === null, 'downloadShareCard 在无 canvas 环境下安全降级不抛错');
+    doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert($('#shareModal').hidden === true, 'Esc 关闭分享卡弹窗');
+
+    // 118-126. 数据文件备份：导出 / 导入 JSON
+    const pkg = window.serializeAll();
+    assert(pkg && pkg.app === 'LearnLog' && typeof pkg.data === 'object' && 'settings' in pkg && 'recurring' in pkg && 'sessions' in pkg, 'serializeAll 导出含全部数据分片');
+    let exErr = null;
+    try { window.exportDataFile(); } catch (e) { exErr = e; }
+    assert(exErr === null, 'exportDataFile 调用不抛错（触发下载）');
+    const curSettings = window.loadSettings();
+    const imp = {
+      data: { '2026-07-10': { tasks: [{ id: 'x1', title: '导入的任务', category: '学习', priority: '中', done: false, tags: [], order: 0 }], notes: '', rating: 0, focusMinutes: 0 } },
+      settings: curSettings, templates: [], badges: {}, habits: [], goals: [], sessions: [], recurring: [], backups: []
+    };
+    const okImport = window.importDataObject(imp);
+    assert(okImport === true, 'importDataObject 返回 true');
+    assert(window.loadData()['2026-07-10'] && window.loadData()['2026-07-10'].tasks[0].title === '导入的任务', '导入数据写入 localStorage 并可回读');
+    assert(window.importDataObject(null) === false, '导入无效对象返回 false 且不抛错');
+
+    // 127-132. 首次引导：完成后写回标记，可重开，Esc 关闭（自动弹出已在第 1 步验证）
+    window.openOnboard();
+    assert($('#onboardModal').hidden === false, 'openOnboard 可重新打开引导');
+    window.finishOnboarding();
+    assert($('#onboardModal').hidden === true, '完成引导后弹窗关闭');
+    assert(window.loadSettings().onboarded === true, '完成引导写回 settings.onboarded=true');
+    window.openOnboard();
+    assert($('#onboardModal').hidden === false, '可从设置重新打开引导');
+    doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert($('#onboardModal').hidden === true, 'Esc 关闭引导弹窗');
 
     console.log(results.join('\n'));
     console.log(errors.length ? ('\nRUNTIME_ERRORS:\n' + errors.join('\n')) : '\nNO_RUNTIME_ERRORS');
