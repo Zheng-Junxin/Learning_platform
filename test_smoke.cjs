@@ -35,6 +35,11 @@ function nextDay(str) {
   const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + 1);
   return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
 }
+function prevDay(str) {
+  const [y, m, d] = str.split('-').map(Number);
+  const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() - 1);
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
 
 setTimeout(() => {
   try {
@@ -643,14 +648,16 @@ setTimeout(() => {
     window.switchView('stats');
     assert($('#statCards').innerHTML.includes('重复任务打卡'), '统计卡含「重复任务打卡」');
 
-    // recurStreak 纯函数多场景（今天 = 2026-07-15）
-    const stA = window.recurStreak({ done: { '2026-07-13': true, '2026-07-14': true, '2026-07-15': true } });
+    // recurStreak 纯函数多场景（相对今天，避免日期写死导致跨天失败）
+    const d0 = window.fmtDate(new Date());       // 今天
+    const d1 = prevDay(d0), d2 = prevDay(d1), d3 = prevDay(d2), d6 = prevDay(prevDay(prevDay(d3)));
+    const stA = window.recurStreak({ done: { [d2]: true, [d1]: true, [d0]: true } });
     assert(stA.cur === 3 && stA.best === 3 && stA.total === 3, '连续 3 天（含今天）→ cur/best/total=3');
-    const stB = window.recurStreak({ done: { '2026-07-10': true, '2026-07-11': true, '2026-07-15': true } });
+    const stB = window.recurStreak({ done: { [prevDay(d6)]: true, [d6]: true, [d0]: true } });
     assert(stB.cur === 1 && stB.best === 2 && stB.total === 3, '今天打卡但中间断 → cur=1,best=2');
-    const stC = window.recurStreak({ done: { '2026-07-14': true } });
+    const stC = window.recurStreak({ done: { [d1]: true } });
     assert(stC.cur === 1 && stC.best === 1, '仅昨天打卡（今天未打卡）→ cur=1（未断）');
-    const stD = window.recurStreak({ done: { '2026-07-10': true } });
+    const stD = window.recurStreak({ done: { [d6]: true } });
     assert(stD.cur === 0 && stD.best === 1, '很久前打卡 → cur=0,best=1');
 
     // 待打卡提醒：未完成的每天/每周任务显示提醒
@@ -733,6 +740,13 @@ setTimeout(() => {
     assert($('#onboardModal').hidden === false, '可从设置重新打开引导');
     doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
     assert($('#onboardModal').hidden === true, 'Esc 关闭引导弹窗');
+
+    // 133-135. 笔记字数实时更新（bugfix：oninput 需调用 updateNoteCount）
+    window.switchView('notes');
+    const na = $('#noteArea');
+    na.value = '今天学了两个小时算法';
+    na.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert($('#noteCount').textContent === (na.value.length + ' 字'), '输入时字数实时更新（实际 ' + $('#noteCount').textContent + '）');
 
     console.log(results.join('\n'));
     console.log(errors.length ? ('\nRUNTIME_ERRORS:\n' + errors.join('\n')) : '\nNO_RUNTIME_ERRORS');

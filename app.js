@@ -321,6 +321,7 @@ function bindEvents() {
   noteArea.oninput = () => {
     clearTimeout(noteArea._t);
     $('#noteSaveState').textContent = '编辑中…';
+    updateNoteCount();
     noteArea._t = setTimeout(() => {
       updateDay(state.currentDate, d => d.notes = noteArea.value);
       $('#noteSaveState').textContent = '已保存 ✓ ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
